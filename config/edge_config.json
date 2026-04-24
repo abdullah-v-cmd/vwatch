@@ -1,0 +1,27 @@
+{
+  "camera_id": "CAM_001",
+  "location": "Main Street & 1st Avenue",
+  "source": 0,
+  "fps": 15,
+  "resolution": [1280, 720],
+  "speed_limit_kmh": 60.0,
+  "confidence_threshold": 0.5,
+  "backend_url": "http://localhost:8000",
+  "api_key": "",
+  "output_dir": "evidence_store",
+  "save_video_clips": false,
+  "model_path": "yolov8n.pt",
+  "device": "cpu",
+  "display": true,
+  "blur_faces": true,
+  "stop_lines": [
+    {
+      "start": [300, 400],
+      "end": [980, 400],
+      "direction": "horizontal"
+    }
+  ],
+  "signal_roi": [50, 10, 150, 200],
+  "lanes": [],
+  "lane_boundaries": []
+}

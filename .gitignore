@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Node.js
+node_modules/
+dist/
+.next/
+out/
+build/
+*.local
+.npm
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.development
+*.dev.vars
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Database
+*.sqlite
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Evidence store (generated at runtime)
+evidence_store/
+uploads/
+*.mp4
+*.avi
+
+# ML models (download separately)
+models/*.pt
+models/*.engine
+models/*.onnx
+!models/.gitkeep
+
+# Wrangler
+.wrangler/

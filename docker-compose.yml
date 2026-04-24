@@ -1,0 +1,101 @@
+version: "3.9"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: vwatch_postgres
+    environment:
+      POSTGRES_DB: vwatch_db
+      POSTGRES_USER: vwatch
+      POSTGRES_PASSWORD: vwatch_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vwatch -d vwatch_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - vwatch_net
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vwatch_backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vwatch:vwatch_pass@postgres:5432/vwatch_db
+      DATABASE_URL_SYNC: postgresql://vwatch:vwatch_pass@postgres:5432/vwatch_db
+      SECRET_KEY: ${SECRET_KEY:-change_this_in_production_32_chars_min}
+      DEBUG: "false"
+      ALLOWED_ORIGINS: '["http://localhost", "http://localhost:3000", "https://your-domain.com"]'
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - evidence_store:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - vwatch_net
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vwatch_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - vwatch_net
+
+  # Edge AI Module (CPU mode)
+  edge_ai:
+    build:
+      context: ./edge_ai
+      dockerfile: Dockerfile
+    container_name: vwatch_edge
+    environment:
+      BACKEND_URL: http://backend:8000
+      CAMERA_SOURCE: "0"
+      CAMERA_ID: CAM_001
+      LOCATION: "Main Street Camera"
+      DISPLAY: "false"
+    volumes:
+      - evidence_store:/app/evidence_store
+      - ./config:/app/config:ro
+      - ./models:/app/models:ro
+    devices:
+      - /dev/video0:/dev/video0  # Webcam passthrough (Linux)
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - vwatch_net
+    profiles:
+      - edge  # Only start with: docker compose --profile edge up
+
+volumes:
+  postgres_data:
+  evidence_store:
+
+networks:
+  vwatch_net:
+    driver: bridge
