@@ -5,6 +5,7 @@ V-Watch Backend - Application Configuration
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 import secrets
+import os
 
 
 class Settings(BaseSettings):
@@ -24,18 +25,25 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://vwatch:vwatch_pass@localhost:5432/vwatch_db"
     DATABASE_URL_SYNC: str = "postgresql://vwatch:vwatch_pass@localhost:5432/vwatch_db"
 
-    # CORS
+    # CORS – allow all origins by default; restrict via ALLOWED_ORIGINS env var in production
     ALLOWED_ORIGINS: List[str] = [
+        "http://localhost",
+        "http://localhost:80",
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://vwatch.example.com",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "*",
     ]
 
     # File Storage
-    UPLOAD_DIR: str = "uploads"
-    MAX_FILE_SIZE_MB: int = 50
+    UPLOAD_DIR: str = "/app/uploads"
+    MAX_FILE_SIZE_MB: int = 200
     ALLOWED_IMAGE_TYPES: List[str] = ["image/jpeg", "image/png", "image/webp"]
-    ALLOWED_VIDEO_TYPES: List[str] = ["video/mp4", "video/avi", "video/x-matroska"]
+    ALLOWED_VIDEO_TYPES: List[str] = [
+        "video/mp4", "video/avi", "video/x-msvideo",
+        "video/quicktime", "video/x-matroska", "video/webm"
+    ]
 
     # Notifications
     SMTP_HOST: str = "smtp.gmail.com"
@@ -54,6 +62,11 @@ class Settings(BaseSettings):
     # Pagination
     DEFAULT_PAGE_SIZE: int = 20
     MAX_PAGE_SIZE: int = 100
+
+    # YOLO
+    YOLO_MODEL_PATH: str = "yolov8n.pt"
+    YOLO_DEVICE: str = "cpu"
+    YOLO_CONFIDENCE: float = 0.5
 
     class Config:
         env_file = ".env"

@@ -6,6 +6,7 @@ WebSocket + REST endpoints for real-time camera monitoring
 import json
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import (
@@ -115,19 +116,17 @@ manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for real-time live monitoring events.
-    
+
     Messages from server:
     - { type: "violation", data: {...} }
     - { type: "camera_status", data: {...} }
     - { type: "ping", timestamp: "..." }
-    - { type: "stats", data: {...} }
-    
+
     Messages from client:
     - { type: "ping" }
     - { type: "subscribe", cameras: ["CAM_001", ...] }
     """
     await manager.connect(websocket)
-    # Send welcome message
     await manager.send_personal(websocket, {
         "type": "connected",
         "message": "Connected to V-Watch Live Monitoring",
@@ -147,7 +146,6 @@ async def websocket_endpoint(websocket: WebSocket):
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         })
                     elif msg.get("type") == "subscribe":
-                        # Acknowledge subscription
                         await manager.send_personal(websocket, {
                             "type": "subscribed",
                             "cameras": msg.get("cameras", []),
@@ -177,29 +175,99 @@ async def report_live_violation(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Edge AI reports a live violation detection.
-    This broadcasts to all WebSocket clients immediately
-    and creates a pending violation record.
+    Frontend webcam / Edge AI reports a live violation detection.
+    - Saves a PENDING Violation record to the database.
+    - Broadcasts the event to all WebSocket clients so every
+      open dashboard tab sees it immediately.
     """
-    timestamp = event.timestamp or datetime.now(timezone.utc).isoformat()
+    timestamp_str = event.timestamp or datetime.now(timezone.utc).isoformat()
 
-    # Broadcast to all connected dashboards
-    await manager.broadcast({
+    # Parse violation_type safely
+    try:
+        vtype = ViolationType(event.violation_type.upper())
+    except ValueError:
+        # Fallback: map common names
+        _map = {
+            "SPEEDING": ViolationType.SPEEDING,
+            "RED_LIGHT": ViolationType.RED_LIGHT,
+            "WRONG_DIRECTION": ViolationType.WRONG_DIRECTION,
+            "LANE_VIOLATION": ViolationType.LANE_VIOLATION,
+            "NO_HELMET": ViolationType.NO_HELMET,
+        }
+        vtype = _map.get(event.violation_type.upper(), ViolationType.SPEEDING)
+
+    # Parse timestamp
+    try:
+        vtime = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+    except Exception:
+        vtime = datetime.now(timezone.utc)
+
+    # Fine map
+    fine_map = {
+        ViolationType.SPEEDING: 200.0,
+        ViolationType.RED_LIGHT: 500.0,
+        ViolationType.WRONG_DIRECTION: 300.0,
+        ViolationType.LANE_VIOLATION: 150.0,
+        ViolationType.NO_HELMET: 100.0,
+    }
+
+    # Generate unique evidence_id
+    evidence_id = f"LIVE-{event.camera_id}-{uuid.uuid4().hex[:12]}"
+
+    # Create violation record in DB
+    violation = Violation(
+        evidence_id=evidence_id,
+        vehicle_id=f"WEBCAM_{event.camera_id}_{uuid.uuid4().hex[:8]}",
+        plate_number=(event.plate_number or "UNKNOWN").upper(),
+        vehicle_type=None,
+        violation_type=vtype,
+        status=ViolationStatus.PENDING,
+        speed_recorded=event.speed,
+        location=event.location or event.camera_id,
+        camera_id=event.camera_id,
+        violation_time=vtime,
+        confidence=event.confidence,
+        fine_amount=fine_map.get(vtype, 200.0),
+    )
+
+    try:
+        db.add(violation)
+        await db.commit()
+        await db.refresh(violation)
+        violation_id = violation.id
+    except Exception as exc:
+        logger.error(f"[LiveMonitoring] DB save error: {exc}")
+        await db.rollback()
+        violation_id = None
+
+    # Broadcast to all WebSocket clients (dashboards)
+    broadcast_data = {
         "type": "violation",
         "data": {
+            "id": violation_id,
             "camera_id": event.camera_id,
-            "violation_type": event.violation_type,
-            "plate_number": event.plate_number or "UNKNOWN",
+            "violation_type": vtype.value,
+            "plate_number": (event.plate_number or "UNKNOWN").upper(),
             "confidence": round(event.confidence, 3),
             "speed": event.speed,
-            "timestamp": timestamp,
+            "timestamp": timestamp_str,
             "location": event.location or "",
             "frame_base64": event.frame_base64,
+            "status": "pending",
         },
-    })
+    }
+    await manager.broadcast(broadcast_data)
 
-    logger.info(f"[LiveMonitoring] Violation broadcast: {event.violation_type} cam={event.camera_id}")
-    return {"status": "broadcasted", "clients": manager.count}
+    logger.info(
+        f"[LiveMonitoring] Violation saved+broadcast: id={violation_id} "
+        f"type={vtype.value} cam={event.camera_id}"
+    )
+
+    return {
+        "status": "saved_and_broadcasted",
+        "violation_id": violation_id,
+        "clients": manager.count,
+    }
 
 
 @router.post("/cameras/status")
@@ -207,7 +275,7 @@ async def update_camera_status(
     update: CameraStatusUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Edge AI reports camera status change."""
+    """Edge AI / frontend reports camera status change."""
     await manager.broadcast({
         "type": "camera_status",
         "data": {
@@ -226,10 +294,7 @@ async def list_monitored_cameras(
     current_user: User = Depends(require_police),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    List all configured cameras for live monitoring.
-    Cameras are stored in SystemConfig with key pattern 'camera.{id}'
-    """
+    """List all configured cameras for live monitoring."""
     result = await db.execute(
         select(SystemConfig).where(SystemConfig.key.like("camera.%"))
     )
@@ -273,7 +338,6 @@ async def add_monitored_camera(
     """Add a new camera to live monitoring."""
     key = f"camera.{cam.camera_id}"
 
-    # Check if already exists
     existing = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
     existing_cfg = existing.scalar_one_or_none()
 
@@ -300,7 +364,6 @@ async def add_monitored_camera(
 
     await db.commit()
 
-    # Broadcast camera added event
     await manager.broadcast({
         "type": "camera_added",
         "data": {"camera_id": cam.camera_id, "name": cam.name},
@@ -339,17 +402,14 @@ async def get_live_stats(
     hour_ago = now - timedelta(hours=1)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Last hour violations
     last_hour = (await db.execute(
         select(func.count(Violation.id)).where(Violation.created_at >= hour_ago)
     )).scalar() or 0
 
-    # Today violations
     today = (await db.execute(
         select(func.count(Violation.id)).where(Violation.violation_time >= today_start)
     )).scalar() or 0
 
-    # By type today
     type_result = await db.execute(
         select(Violation.violation_type, func.count(Violation.id))
         .where(Violation.violation_time >= today_start)
@@ -357,7 +417,6 @@ async def get_live_stats(
     )
     by_type = {str(row[0].value): row[1] for row in type_result}
 
-    # Recent violations (last 10)
     recent_result = await db.execute(
         select(Violation)
         .order_by(desc(Violation.created_at))

@@ -2,7 +2,8 @@ import React, { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, AlertTriangle, Users, Settings,
-  FileText, LogOut, Menu, X, Shield, Camera, Bell, Video
+  FileText, LogOut, Menu, X, Shield, Camera, Bell, Video,
+  Activity
 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { authApi } from '../utils/api'
@@ -14,6 +15,7 @@ const navItems = [
   { to: '/live-monitoring', icon: Video, label: 'Live Monitoring' },
   { to: '/violations', icon: AlertTriangle, label: 'Violations' },
   { to: '/users', icon: Users, label: 'Users', adminOnly: true },
+  { to: '/yolo-test', icon: Activity, label: 'YOLO Test', adminOnly: true },
   { to: '/config', icon: Settings, label: 'Configuration', adminOnly: true },
   { to: '/audit-logs', icon: FileText, label: 'Audit Logs', adminOnly: true },
 ]
@@ -39,7 +41,7 @@ const Layout: React.FC = () => {
       {/* Sidebar */}
       <aside
         className={clsx(
-          'flex flex-col bg-gray-900 border-r border-gray-800 transition-all duration-300 z-40',
+          'flex flex-col bg-gray-900 border-r border-gray-800 transition-all duration-300 z-40 flex-shrink-0',
           sidebarOpen ? 'w-64' : 'w-16'
         )}
       >
@@ -78,6 +80,7 @@ const Layout: React.FC = () => {
                       : 'text-gray-400 hover:text-white hover:bg-gray-800'
                   )
                 }
+                title={!sidebarOpen ? item.label : undefined}
               >
                 <item.icon className="w-5 h-5 flex-shrink-0" />
                 {sidebarOpen && <span className="font-medium text-sm">{item.label}</span>}
@@ -94,7 +97,7 @@ const Layout: React.FC = () => {
             {sidebarOpen && (
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">{user?.full_name}</p>
-                <p className="text-xs text-gray-500 truncate capitalize">{user?.role?.replace('_', ' ')}</p>
+                <p className="text-xs text-gray-500 truncate capitalize">{user?.role?.replace(/_/g, ' ')}</p>
               </div>
             )}
             <button
@@ -109,19 +112,18 @@ const Layout: React.FC = () => {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Header */}
-        <header className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+        <header className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
             <span className="text-gray-400 text-sm">System Online</span>
           </div>
           <div className="flex items-center gap-4">
-            <button className="relative text-gray-400 hover:text-white">
+            <button className="relative text-gray-400 hover:text-white" title="Notifications">
               <Bell className="w-5 h-5" />
-              <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full text-xs flex items-center justify-center text-white">3</span>
             </button>
-            <span className="text-gray-400 text-sm">
+            <span className="text-gray-400 text-sm hidden sm:block">
               {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </span>
           </div>

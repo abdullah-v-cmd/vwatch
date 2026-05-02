@@ -26,13 +26,14 @@ class ViolationCreate(BaseModel):
     metadata_sha256: Optional[str] = None
     extra_data: Optional[Dict[str, Any]] = None
 
-    # Aliases for edge AI metadata format
     class Config:
         populate_by_name = True
 
 
 class ViolationReview(BaseModel):
-    status: ViolationStatus
+    """Schema for approving/rejecting a violation.
+    'status' field is optional – the endpoint route already determines the action."""
+    status: Optional[ViolationStatus] = None
     remarks: Optional[str] = None
     fine_amount: Optional[float] = None
 

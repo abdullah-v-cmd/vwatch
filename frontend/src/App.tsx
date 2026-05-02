@@ -10,6 +10,7 @@ import UsersPage from './pages/UsersPage'
 import ConfigPage from './pages/ConfigPage'
 import AuditLogsPage from './pages/AuditLogsPage'
 import LiveMonitoringPage from './pages/LiveMonitoringPage'
+import YoloTestPage from './pages/YoloTestPage'
 import Layout from './components/Layout'
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; adminOnly?: boolean }> = ({
@@ -76,6 +77,14 @@ function App() {
             element={
               <ProtectedRoute adminOnly>
                 <AuditLogsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="yolo-test"
+            element={
+              <ProtectedRoute adminOnly>
+                <YoloTestPage />
               </ProtectedRoute>
             }
           />

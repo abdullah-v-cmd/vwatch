@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Search, Filter, RefreshCw, Eye, CheckCircle, XCircle,
-  AlertTriangle, ChevronLeft, ChevronRight
+  Search, RefreshCw, Eye, CheckCircle, XCircle,
+  AlertTriangle, ChevronLeft, ChevronRight, Wifi, WifiOff
 } from 'lucide-react'
 import { violationsApi } from '../utils/api'
 import toast from 'react-hot-toast'
@@ -47,6 +47,8 @@ const ViolationsPage: React.FC = () => {
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [loading, setLoading] = useState(true)
+  const [liveConnected, setLiveConnected] = useState(false)
+  const [newCount, setNewCount] = useState(0)
 
   // Filters
   const [search, setSearch] = useState('')
@@ -58,6 +60,9 @@ const ViolationsPage: React.FC = () => {
   const [remarks, setRemarks] = useState('')
   const [reviewing, setReviewing] = useState(false)
 
+  const wsRef = useRef<WebSocket | null>(null)
+  const mountedRef = useRef(true)
+
   const fetchViolations = useCallback(async () => {
     setLoading(true)
     try {
@@ -68,6 +73,7 @@ const ViolationsPage: React.FC = () => {
       const res = await violationsApi.list(params)
       setViolations(res.data.items || [])
       setTotal(res.data.total || 0)
+      setNewCount(0)
     } catch {
       toast.error('Failed to load violations')
     } finally {
@@ -78,6 +84,61 @@ const ViolationsPage: React.FC = () => {
   useEffect(() => {
     fetchViolations()
   }, [fetchViolations])
+
+  // ── WebSocket: listen for new violations and refresh the list ──────────────
+  useEffect(() => {
+    mountedRef.current = true
+
+    const wsBase = (import.meta.env.VITE_WS_URL || 'ws://localhost:8000/api/v1')
+    const wsUrl = `${wsBase}/live/ws`
+
+    const connect = () => {
+      if (!mountedRef.current) return
+      try {
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          if (mountedRef.current) setLiveConnected(true)
+        }
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'violation' && mountedRef.current) {
+              // Increment new count — user can click refresh to see them
+              setNewCount(prev => prev + 1)
+              // Auto-refresh if on first page with no filters active
+              if (page === 1 && !search && !filterStatus && !filterType) {
+                setTimeout(() => {
+                  if (mountedRef.current) fetchViolations()
+                }, 800)
+              }
+            }
+          } catch { /* ignore */ }
+        }
+
+        ws.onclose = () => {
+          if (mountedRef.current) {
+            setLiveConnected(false)
+            setTimeout(connect, 5000)
+          }
+        }
+
+        ws.onerror = () => {
+          if (mountedRef.current) setLiveConnected(false)
+        }
+      } catch { /* ignore */ }
+    }
+
+    connect()
+
+    return () => {
+      mountedRef.current = false
+      wsRef.current?.close()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleReview = async () => {
     if (!reviewModal) return
@@ -100,20 +161,44 @@ const ViolationsPage: React.FC = () => {
     }
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Violations</h1>
           <p className="text-gray-400 text-sm mt-1">{total} total violations</p>
         </div>
-        <button onClick={fetchViolations} className="btn-secondary">
-          <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Live indicator */}
+          <div className={clsx(
+            'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium',
+            liveConnected
+              ? 'bg-green-900/30 border-green-700 text-green-400'
+              : 'bg-gray-800 border-gray-700 text-gray-400'
+          )}>
+            {liveConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+            {liveConnected ? 'Live' : 'Offline'}
+          </div>
+
+          {/* New violations notification */}
+          {newCount > 0 && (
+            <button
+              onClick={fetchViolations}
+              className="flex items-center gap-2 bg-blue-900/30 border border-blue-700 rounded-lg px-3 py-1.5 text-xs text-blue-400 hover:bg-blue-900/50 transition-colors"
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              {newCount} new — click to refresh
+            </button>
+          )}
+
+          <button onClick={fetchViolations} className="btn-secondary">
+            <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -194,7 +279,7 @@ const ViolationsPage: React.FC = () => {
                     </td>
                     <td className="px-4 py-3">
                       <span className={clsx('font-medium', TYPE_COLORS[v.violation_type] || 'text-gray-300')}>
-                        {v.violation_type.replace('_', ' ')}
+                        {v.violation_type.replace(/_/g, ' ')}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -302,7 +387,7 @@ const ViolationsPage: React.FC = () => {
               </button>
               <button
                 onClick={handleReview}
-                disabled={reviewing || (reviewModal.action === 'reject' && !remarks)}
+                disabled={reviewing || (reviewModal.action === 'reject' && !remarks.trim())}
                 className={clsx(
                   'flex-1 justify-center',
                   reviewModal.action === 'approve' ? 'btn-success' : 'btn-danger',

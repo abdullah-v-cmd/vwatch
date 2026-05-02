@@ -1,372 +1,480 @@
-# 🚦 V-Watch: AI-Powered Smart Traffic Violation Detection System
+# V-Watch — AI Traffic Violation Management System
 
-<div align="center">
-
-![V-Watch Banner](https://img.shields.io/badge/V--Watch-AI%20Traffic%20Management-red?style=for-the-badge&logo=camera)
-![Python](https://img.shields.io/badge/Python-3.11-blue?style=flat-square&logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi)
-![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker)
-
-**Production-grade AI traffic violation detection with centralized management**
-
-</div>
+An end-to-end traffic violation detection and management platform powered by YOLOv8, FastAPI, React, and PostgreSQL.
 
 ---
 
-## 📋 Table of Contents
-- [Architecture Overview](#architecture)
+## Table of Contents
+
+- [Architecture Overview](#architecture-overview)
 - [Features](#features)
-- [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
-- [API Documentation](#api-docs)
-- [Security](#security)
-- [Edge AI Deployment](#edge-ai)
-- [Testing](#testing)
+- [Quick Start — Docker (Recommended)](#quick-start--docker-recommended)
+- [Manual Start (Development)](#manual-start-development)
+- [Default Credentials](#default-credentials)
+- [API Reference](#api-reference)
+- [Environment Variables](#environment-variables)
+- [Edge AI Module](#edge-ai-module)
+- [Admin YOLO Test](#admin-yolo-test)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## 🏗️ Architecture <a name="architecture"></a>
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  LAYER 1: INTELLIGENT EDGE                                  │
-│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │  RTSP   │→ │ YOLOv8   │→ │ DeepSORT │→ │ Violation  │  │
-│  │  Stream │  │Detection │  │Tracking  │  │ Detection  │  │
-│  └─────────┘  └──────────┘  └──────────┘  └─────┬──────┘  │
-│                                                   │         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┘         │
-│  │  ANPR    │  │ Evidence │  │ Face Blurring               │
-│  │ EasyOCR  │  │ SHA-256  │  │ (Privacy)                   │
-│  └──────────┘  └──────────┘                                │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ HTTPS API
-┌───────────────────────────▼─────────────────────────────────┐
-│  LAYER 2: CENTRALIZED MANAGEMENT                            │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  FastAPI Backend                                     │   │
-│  │  ┌────────┐ ┌──────────┐ ┌───────────┐ ┌────────┐  │   │
-│  │  │ Auth   │ │Violations│ │  Users    │ │ Audit  │  │   │
-│  │  │ JWT    │ │ CRUD     │ │ RBAC      │ │ Logs   │  │   │
-│  │  └────────┘ └──────────┘ └───────────┘ └────────┘  │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────┐  ┌──────────────────────────────────────┐    │
-│  │  React   │  │  PostgreSQL + File Storage            │    │
-│  │ Frontend │  │  Evidence: SHA-256 Hashed             │    │
-│  └──────────┘  └──────────────────────────────────────┘    │
+│                        Docker Network (vwatch_net)          │
+│                                                             │
+│  ┌──────────────┐   nginx proxy    ┌──────────────────────┐ │
+│  │   Frontend   │ ───────────────► │   Backend (FastAPI)  │ │
+│  │  React+Nginx │ :3000→:80        │   Python 3.11        │ │
+│  │  Port 3000   │                  │   Port 8000          │ │
+│  └──────────────┘                  └──────────┬───────────┘ │
+│                                               │             │
+│  ┌──────────────┐                  ┌──────────▼───────────┐ │
+│  │   Edge AI    │ HTTP POST        │   PostgreSQL 16      │ │
+│  │  YOLOv8 CPU  │ ───────────────► │   Port 5432          │ │
+│  │  (--profile  │                  └──────────────────────┘ │
+│  │    edge)     │                                           │
+│  └──────────────┘                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## ✨ Features <a name="features"></a>
-
-### Edge AI Module
-- 🎥 **Multi-source video**: RTSP cameras, webcams, video files
-- 🚗 **YOLOv8/v10 detection**: Cars, trucks, buses, motorcycles, bicycles
-- 🔄 **DeepSORT tracking**: Persistent vehicle IDs across frames
-- ⚡ **Violation detection**:
-  - Speeding (homography-based real-world speed estimation)
-  - Red light (line-crossing + signal color detection)
-  - Wrong direction (motion vector analysis)
-  - Lane violation (boundary crossing)
-- 🔤 **ANPR**: Multi-engine OCR (EasyOCR/Tesseract)
-- 🔐 **SHA-256 evidence hashing** (tamper-proof)
-- 😶 **Face blurring** (privacy compliance)
-- 🔌 **Offline buffering** (auto-replay when backend reconnects)
-
-### Backend
-- 🔑 **JWT Authentication** with role-based access control
-- 📋 **Roles**: Admin, Traffic Police, Viewer
-- 🏛️ **Full REST API** for violations, users, config, audit logs
-- ✅ **Evidence integrity verification** (SHA-256 chain)
-- 📧 **Email/SMS notifications** (SMTP + Twilio)
-- 🗄️ **PostgreSQL** with async SQLAlchemy
-- 📊 **Statistics & analytics** endpoints
-
-### Frontend Admin Panel
-- 📊 **Dashboard**: Live stats, charts, violation type breakdown
-- 📋 **Violations**: Table view, filters, approve/reject workflow
-- 🖼️ **Evidence viewer**: Image lightbox, integrity checker
-- 👥 **User management**: Create, update, deactivate users
-- ⚙️ **System config**: Speed limits, fine amounts, rules
-- 📝 **Audit logs**: Complete activity trail
+**Services:**
+| Service | Image | Port | Description |
+|---------|-------|------|-------------|
+| `postgres` | postgres:16-alpine | 5432 | Database |
+| `backend` | ./backend | 8000 | FastAPI REST + WebSocket |
+| `frontend` | ./frontend | 3000→80 | React (nginx) |
+| `edge_ai` | ./edge_ai | — | YOLOv8 detection (opt-in) |
 
 ---
 
-## 🚀 Quick Start <a name="quick-start"></a>
+## Features
 
-### Option 1: Docker Compose (Recommended)
+- **AI Detection** – YOLOv8n vehicle detection with bounding boxes (singleton model, loaded once)
+- **Live Monitoring** – Real-time webcam/CCTV feeds with canvas bbox overlay; streams survive page navigation
+- **WebSocket feed** – Violations appear instantly on the Violations page and Live Monitoring feed
+- **Violations workflow** – Pending → Approve / Reject with remarks and fine management
+- **Admin YOLO Test** – Upload a video file and run YOLO detection directly from the browser
+- **Evidence integrity** – SHA-256 hash verification for every uploaded frame/plate/video
+- **RBAC** – Admin, Traffic Police, and Viewer roles with JWT authentication
+- **Edge AI** – Standalone Python module streams from webcam/RTSP, submits violations to backend with offline buffering
+- **Docker-ready** – Single `docker compose up` starts the full stack
+
+---
+
+## Quick Start — Docker (Recommended)
+
+### Prerequisites
+
+- Docker ≥ 24 and Docker Compose ≥ 2.20
+- 4 GB RAM free
+
+### 1. Clone and configure
 
 ```bash
-# Clone repository
-git clone https://github.com/YOUR_USERNAME/vwatch.git
+git clone https://github.com/abdullah-v-cmd/vwatch.git
 cd vwatch
 
-# Start all services (backend + frontend + database)
+# Optional: override the JWT secret (strongly recommended for production)
+echo 'SECRET_KEY=your_random_32_char_secret_here' > .env
+```
+
+### 2. Start core services
+
+```bash
 docker compose up -d
-
-# With edge AI module
-docker compose --profile edge up -d
-
-# View logs
-docker compose logs -f backend
-
-# Access:
-# Frontend: http://localhost:3000
-# Backend API: http://localhost:8000
-# API Docs: http://localhost:8000/docs
-# Default Login: admin / Admin@123!
 ```
 
-### Option 2: Manual Setup
+This starts **postgres**, **backend**, and **frontend**.
 
-#### 1. Database Setup
+| URL | Service |
+|-----|---------|
+| http://localhost:3000 | Frontend dashboard |
+| http://localhost:8000/docs | Backend API docs (Swagger) |
+| http://localhost:8000/redoc | ReDoc |
+
+### 3. (Optional) Start Edge AI with webcam
+
+> Requires a webcam attached to the host. On Windows/Mac, comment out the `devices` section in `docker-compose.yml`.
+
 ```bash
-# Install and start PostgreSQL
-sudo apt-get install postgresql -y
-sudo -u postgres psql -c "CREATE USER vwatch WITH PASSWORD 'vwatch_pass';"
-sudo -u postgres psql -c "CREATE DATABASE vwatch_db OWNER vwatch;"
+docker compose --profile edge up -d edge_ai
 ```
 
-#### 2. Backend
+### 4. Stop everything
+
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-cp .env.example .env
-# Edit .env with your settings
-
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+docker compose down          # stop containers
+docker compose down -v       # stop + delete all data volumes
 ```
 
-#### 3. Frontend
+### Rebuilding after code changes
+
 ```bash
-cd frontend
-npm install
-
-# Create .env
-echo "VITE_API_URL=http://localhost:8000/api/v1" > .env
-
-npm run dev
-# Open http://localhost:5173
-```
-
-#### 4. Edge AI
-```bash
-cd edge_ai
-pip install -r requirements.txt
-
-# Install YOLOv8 model
-python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-
-# Run with webcam
-python main.py --source 0 --display
-
-# Run with RTSP stream
-python main.py --source "rtsp://admin:pass@192.168.1.100/stream"
-
-# Run with video file
-python main.py --source "/path/to/video.mp4"
+docker compose build --no-cache
+docker compose up -d
 ```
 
 ---
 
-## 📁 Project Structure <a name="project-structure"></a>
+## Manual Start (Development)
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 20+
+- PostgreSQL 16 running locally
+
+### 1. Database
+
+```bash
+# Create database and user
+psql -U postgres <<'SQL'
+CREATE USER vwatch WITH PASSWORD 'vwatch_pass';
+CREATE DATABASE vwatch_db OWNER vwatch;
+SQL
+
+# Apply schema
+psql -U vwatch -d vwatch_db < scripts/init_db.sql
+```
+
+### 2. Backend
+
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env: set DATABASE_URL, DATABASE_URL_SYNC, SECRET_KEY
+
+# Start development server
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Backend available at: http://localhost:8000  
+Swagger docs at: http://localhost:8000/docs
+
+### 3. Frontend
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server (proxies /api → localhost:8000)
+npm run dev
+```
+
+Frontend available at: http://localhost:3000
+
+### 4. Edge AI (optional)
+
+```bash
+cd edge_ai
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install CPU-only dependencies (no GPU required)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+# Run with default webcam
+python main.py --config config/edge_config.json
+
+# Run without display (headless / server)
+python main.py --config config/edge_config.json --no-display
+
+# Run on a video file for testing
+python main.py --source /path/to/video.mp4 --no-display
+```
+
+---
+
+## Default Credentials
+
+| Role | Username | Password |
+|------|----------|----------|
+| Admin | `admin` | `Admin@123!` |
+
+> The default admin is created automatically on first startup.
+> Change the password immediately in production via: **Profile → Change Password**.
+
+---
+
+## API Reference
+
+All endpoints are prefixed with `/api/v1`. Interactive docs available at `/docs`.
+
+### Authentication
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/auth/login` | None | Login (returns JWT) |
+| POST | `/auth/refresh` | None | Refresh access token |
+| GET | `/auth/me` | Bearer | Current user profile |
+| POST | `/auth/change-password` | Bearer | Change password |
+| POST | `/auth/logout` | Bearer | Logout |
+
+### Violations
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/violations` | None | Submit violation (Edge AI) |
+| POST | `/violations/manual` | Police | Manually create violation |
+| GET | `/violations` | Police | List with filters & pagination |
+| GET | `/violations/stats` | Police | Dashboard statistics |
+| GET | `/violations/{id}` | Police | Get single violation |
+| POST | `/violations/{id}/approve` | Police | Approve violation |
+| POST | `/violations/{id}/reject` | Police | Reject violation |
+| POST | `/violations/{id}/files` | None | Upload evidence files |
+| GET | `/violations/{id}/files/{filename}` | None | Serve evidence file |
+| POST | `/violations/{id}/verify-integrity` | Police | Verify SHA-256 hashes |
+
+### Live Monitoring
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| WS | `/live/ws` | None | WebSocket feed |
+| POST | `/live/violations/report` | None | Report + save live violation |
+| POST | `/live/cameras/status` | None | Update camera status |
+| GET | `/live/cameras` | Police | List configured cameras |
+| POST | `/live/cameras` | Police | Add camera |
+| DELETE | `/live/cameras/{id}` | Police | Remove camera |
+| GET | `/live/stats` | Police | Live statistics |
+| GET | `/live/recent-violations` | Police | Recent violations |
+| GET | `/live/ws/count` | None | WebSocket client count |
+
+### YOLO Analysis
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/yolo/status` | Police | Model status (running/mock) |
+| POST | `/yolo/analyze-video` | Police | Upload + analyze video |
+
+### Users (Admin only)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/users` | Admin | List users |
+| POST | `/users` | Admin | Create user |
+| GET | `/users/{id}` | Admin | Get user |
+| PATCH | `/users/{id}` | Admin | Update user |
+| DELETE | `/users/{id}` | Admin | Deactivate user |
+
+### Config & Audit (Admin only)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/config` | Admin | List config keys |
+| PUT | `/config` | Admin | Upsert config key |
+| DELETE | `/config/{key}` | Admin | Delete config key |
+| GET | `/audit-logs` | Admin | Audit log with filters |
+
+---
+
+## Environment Variables
+
+### Backend
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `postgresql+asyncpg://vwatch:vwatch_pass@localhost:5432/vwatch_db` | Async DB URL |
+| `DATABASE_URL_SYNC` | `postgresql://vwatch:vwatch_pass@localhost:5432/vwatch_db` | Sync DB URL |
+| `SECRET_KEY` | auto-generated | JWT signing key (set in production!) |
+| `DEBUG` | `false` | Enable debug mode |
+| `UPLOAD_DIR` | `/app/uploads` | Evidence file storage path |
+| `ALLOWED_ORIGINS` | `["*"]` | CORS allowed origins |
+| `YOLO_MODEL_PATH` | `yolov8n.pt` | YOLO model file |
+| `YOLO_DEVICE` | `cpu` | `cpu` or `cuda` |
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP server |
+| `SMTP_USER` | `` | SMTP username |
+| `SMTP_PASSWORD` | `` | SMTP password |
+
+### Frontend (build-time)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_API_URL` | `/api/v1` (Docker) / `http://localhost:8000/api/v1` (dev) | Backend API base URL |
+| `VITE_WS_URL` | `ws://localhost/api/v1` (Docker) / `ws://localhost:8000/api/v1` (dev) | WebSocket base URL |
+
+### Edge AI
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKEND_URL` | `http://localhost:8000` | Backend URL (use `http://backend:8000` in Docker) |
+| `CAMERA_SOURCE` | `0` | Video source (0=webcam, or RTSP URL) |
+| `CAMERA_ID` | `CAM_001` | Camera identifier |
+| `LOCATION` | `Main Street Camera` | Camera location label |
+| `YOLO_MODEL_PATH` | `yolov8n.pt` | YOLO model |
+| `YOLO_DEVICE` | `cpu` | Device |
+| `DISPLAY` | `true` | Show OpenCV window |
+
+---
+
+## Edge AI Module
+
+The Edge AI module (`edge_ai/`) processes video streams and automatically submits violations to the backend.
+
+### How it works
+
+1. **Video stream** — OpenCV reads webcam, RTSP, or file source
+2. **YOLO detection** — Single YOLOv8 model instance detects vehicles (singleton pattern, loaded once)
+3. **DeepSORT tracking** — Assigns persistent IDs across frames
+4. **Violation analysis** — Speed, red-light, wrong direction, lane change detection
+5. **ANPR** — License plate recognition via EasyOCR + Tesseract
+6. **Evidence** — Frame, plate, video clip saved to `evidence_store/`
+7. **API submission** — POSTs to `POST /api/v1/violations`, uploads files, broadcasts to WebSocket
+8. **Offline buffering** — Queued to `offline_buffer.jsonl` if backend unreachable
+
+### Evidence upload flow
+
+```
+Edge AI                           Backend
+  │                                  │
+  ├─ POST /api/v1/violations ───────►│ Creates PENDING record → returns {id}
+  │                                  │
+  ├─ POST /api/v1/violations/{id}/files ──► Saves frame.jpg, plate.jpg, clip.mp4
+  │                                  │
+  └─ POST /api/v1/live/violations/report ──► Broadcasts to WebSocket clients
+```
+
+---
+
+## Admin YOLO Test
+
+The **YOLO Test** page (Admin sidebar → "YOLO Test") lets you:
+
+1. Check whether the YOLO model is loaded or running in mock mode
+2. Upload a video (MP4, AVI, MOV, MKV, WebM — max 200 MB)
+3. Set confidence threshold and camera metadata
+4. Run YOLOv8 detection — results show per-frame bounding boxes, class breakdown, thumbnail
+5. Optionally save detected vehicles as PENDING violation records
+
+**Mock mode**: If `ultralytics` is not installed in the backend container, the system runs in mock mode — all API flows work identically but detections are simulated placeholder boxes.
+
+To enable real YOLO detection in the backend container:
+```bash
+docker compose exec backend pip install ultralytics
+docker compose restart backend
+```
+
+---
+
+## Troubleshooting
+
+### Backend fails to start
+
+```bash
+# Check logs
+docker compose logs backend --tail=50
+
+# Most common: database not ready yet
+docker compose restart backend
+```
+
+### WebSocket connection fails
+
+- In Docker: nginx is configured to proxy WebSocket at `/api/v1/live/ws` with correct `Upgrade` headers
+- In dev: vite proxy handles WebSocket (`ws: true` in `vite.config.ts`)
+- Check browser console for connection errors
+
+### Evidence files not found (404)
+
+- Backend serves files at `/api/v1/violations/{id}/files/{filename}`
+- In Docker, both backend and edge_ai share the `evidence_store` volume
+- Verify the volume is mounted: `docker compose exec backend ls /app/uploads`
+
+### YOLO model not loading
+
+```bash
+# Backend logs show whether ultralytics loaded
+docker compose logs backend | grep YOLO
+
+# Install manually inside running container
+docker compose exec backend pip install ultralytics
+docker compose restart backend
+```
+
+### Camera permission denied (webcam)
+
+- Browser must have camera permission granted
+- In Chrome: click the camera icon in the address bar → Allow
+- HTTPS is required for camera access on deployed (non-localhost) sites
+
+### Violations not appearing on Violations page
+
+- Violations are saved to DB by `POST /live/violations/report` (live webcam) or `POST /violations` (edge AI)
+- The Violations page auto-refreshes via WebSocket when new violations arrive
+- Click **Refresh** button or the blue "N new — click to refresh" banner
+
+### Docker containers can't communicate
+
+All services must be on the `vwatch_net` bridge network. Verify:
+```bash
+docker network inspect vwatch_vwatch_net
+```
+
+The edge_ai uses `http://backend:8000` (Docker service name, not `localhost`).
+
+---
+
+## Project Structure
 
 ```
 vwatch/
-├── edge_ai/                    # Edge AI Module
-│   ├── main.py                 # Main orchestrator
-│   ├── stream_handler.py       # RTSP/webcam input
-│   ├── detectors/
-│   │   └── vehicle_detector.py # YOLOv8 detection + plate detector
-│   ├── trackers/
-│   │   └── deepsort_tracker.py # Multi-object tracking
-│   ├── violations/
-│   │   ├── speed_detector.py   # Homography speed estimation
-│   │   ├── redlight_detector.py # Stop-line + signal detection
-│   │   └── wrong_direction_detector.py # Direction + lane violation
-│   ├── anpr/
-│   │   └── anpr_processor.py   # ANPR pipeline (detect + OCR)
-│   ├── evidence/
-│   │   └── evidence_generator.py # SHA-256 evidence package
-│   └── utils/
-│       ├── face_blurring.py    # Privacy face blurring
-│       └── api_client.py       # Backend HTTP client
-│
-├── backend/                    # FastAPI Backend
+├── backend/                    # FastAPI backend
 │   ├── app/
-│   │   ├── main.py             # FastAPI app entry
-│   │   ├── core/
-│   │   │   ├── config.py       # Settings
-│   │   │   ├── database.py     # SQLAlchemy async engine
-│   │   │   ├── security.py     # JWT + bcrypt
-│   │   │   └── dependencies.py # Auth dependencies
-│   │   ├── models/
-│   │   │   ├── user.py         # User model
-│   │   │   └── violation.py    # Violation/Vehicle/Audit models
-│   │   ├── schemas/            # Pydantic request/response schemas
-│   │   ├── api/
-│   │   │   ├── auth.py         # Auth endpoints
-│   │   │   ├── violations.py   # Violation CRUD + review
-│   │   │   ├── users.py        # User management
-│   │   │   └── config_api.py   # Config + audit logs
-│   │   └── services/
-│   │       └── notification.py # Email/SMS service
-│   ├── Dockerfile
-│   └── requirements.txt
-│
-├── frontend/                   # React Admin Panel
-│   ├── src/
-│   │   ├── App.tsx             # Router + protected routes
-│   │   ├── pages/
-│   │   │   ├── LoginPage.tsx   # Authentication
-│   │   │   ├── DashboardPage.tsx # Stats + charts
-│   │   │   ├── ViolationsPage.tsx # Table + approve/reject
-│   │   │   ├── ViolationDetailPage.tsx # Detail + evidence
-│   │   │   ├── UsersPage.tsx   # User management
-│   │   │   ├── ConfigPage.tsx  # System config
-│   │   │   └── AuditLogsPage.tsx # Audit trail
-│   │   ├── components/
-│   │   │   └── Layout.tsx      # Sidebar + header
-│   │   ├── store/
-│   │   │   └── authStore.ts    # Zustand auth state
-│   │   └── utils/
-│   │       └── api.ts          # Axios client + all API calls
+│   │   ├── api/               # Route handlers
+│   │   │   ├── auth.py
+│   │   │   ├── violations.py  # Core violations CRUD
+│   │   │   ├── live_monitoring.py  # WebSocket + live feed
+│   │   │   ├── yolo_analysis.py    # Admin YOLO test endpoint
+│   │   │   ├── users.py
+│   │   │   └── config_api.py
+│   │   ├── core/              # Config, DB, security, deps
+│   │   ├── models/            # SQLAlchemy ORM models
+│   │   ├── schemas/           # Pydantic request/response schemas
+│   │   ├── services/          # Notification service
+│   │   └── main.py            # App entry point
+│   ├── requirements.txt
 │   └── Dockerfile
-│
+├── frontend/                  # React + Vite + Tailwind
+│   ├── src/
+│   │   ├── pages/             # Page components
+│   │   ├── components/        # Layout, shared UI
+│   │   ├── store/             # Zustand auth store
+│   │   └── utils/             # Axios API client, WebSocket
+│   ├── nginx.conf             # Nginx with WS proxy
+│   └── Dockerfile
+├── edge_ai/                   # YOLOv8 edge detection module
+│   ├── main.py                # Engine orchestrator
+│   ├── detectors/             # YOLO singleton vehicle detector
+│   ├── trackers/              # DeepSORT multi-object tracker
+│   ├── violations/            # Speed, red-light, direction detectors
+│   ├── anpr/                  # License plate recognition
+│   ├── evidence/              # Evidence generation
+│   └── utils/                 # API client (with offline buffer)
 ├── config/
-│   └── edge_config.json        # Edge AI configuration
-├── models/                     # YOLO model weights directory
+│   └── edge_config.json       # Edge AI configuration
 ├── scripts/
-│   └── init_db.sql             # DB initialization
-├── docker-compose.yml          # Full stack compose
-└── README.md
+│   └── init_db.sql            # Database initialization
+└── docker-compose.yml
 ```
 
 ---
 
-## 🔌 API Documentation <a name="api-docs"></a>
+## License
 
-**Base URL**: `http://localhost:8000/api/v1`
-
-| Method | Endpoint | Description | Auth |
-|--------|----------|-------------|------|
-| POST | `/auth/login` | Get JWT tokens | None |
-| GET | `/auth/me` | Get current user | Required |
-| POST | `/violations` | Submit violation (Edge AI) | Optional |
-| GET | `/violations` | List violations with filters | Police/Admin |
-| GET | `/violations/stats` | Dashboard statistics | Police/Admin |
-| GET | `/violations/{id}` | Get single violation | Police/Admin |
-| POST | `/violations/{id}/approve` | Approve violation | Police/Admin |
-| POST | `/violations/{id}/reject` | Reject violation | Police/Admin |
-| POST | `/violations/{id}/files` | Upload evidence files | Police/Admin |
-| POST | `/violations/{id}/verify-integrity` | SHA-256 check | Police/Admin |
-| GET | `/users` | List users | Admin |
-| POST | `/users` | Create user | Admin |
-| PATCH | `/users/{id}` | Update user | Admin |
-| DELETE | `/users/{id}` | Deactivate user | Admin |
-| GET | `/config` | List system config | Admin |
-| PUT | `/config` | Update config | Admin |
-| GET | `/audit-logs` | Get audit logs | Admin |
-
-Interactive docs: **http://localhost:8000/docs**
-
----
-
-## 🔐 Security <a name="security"></a>
-
-- **JWT tokens** with configurable expiry (default: 8 hours)
-- **bcrypt password hashing** (cost factor 12)
-- **Role-based access control** (Admin > Police > Viewer)
-- **SHA-256 evidence hashing** for tamper detection
-- **Audit logging** for all critical actions
-- **CORS** with explicit origin whitelist
-- **Security headers** (X-Content-Type-Options, X-Frame-Options, etc.)
-- **Face blurring** (GDPR/privacy compliance)
-- **HTTPS required** in production (use nginx/reverse proxy)
-
----
-
-## 🤖 Edge AI Configuration <a name="edge-ai"></a>
-
-### RTSP Camera Setup
-```json
-{
-  "source": "rtsp://admin:password@192.168.1.100:554/stream1",
-  "fps": 15,
-  "resolution": [1920, 1080]
-}
-```
-
-### Speed Detection (Homography)
-For accurate speed detection, provide 4+ reference points mapping pixel positions to real-world coordinates (meters):
-```python
-reference_points_image = [(100,400), (500,400), (900,400), (300,200)]
-reference_points_world = [(0,0), (10,0), (20,0), (5,10)]  # meters
-```
-
-### NVIDIA Jetson Optimization
-```bash
-# Use TensorRT export for FP16 inference
-from ultralytics import YOLO
-model = YOLO("yolov8n.pt")
-model.export(format="engine", half=True, device=0)  # TensorRT FP16
-```
-
----
-
-## 🧪 Testing <a name="testing"></a>
-
-### Backend Tests
-```bash
-cd backend
-pip install pytest pytest-asyncio httpx
-pytest tests/ -v
-```
-
-### Simulated Test (without camera)
-```bash
-# Generate test violations via API
-curl -X POST http://localhost:8000/api/v1/violations \
-  -H "Content-Type: application/json" \
-  -d '{
-    "evidence_id": "test-001",
-    "vehicle_id": "VH_000001",
-    "plate_number": "ABC 1234",
-    "violation_type": "SPEEDING",
-    "speed_recorded": 95.5,
-    "speed_limit": 60.0,
-    "location": "Main Street",
-    "camera_id": "CAM_001",
-    "violation_time": "2024-01-15T10:30:00Z",
-    "confidence": 0.92
-  }'
-```
-
----
-
-## 📊 Performance Metrics
-
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Detection latency | < 2s | ~80ms (YOLOv8n GPU) |
-| ANPR accuracy | > 90% | ~93% (clear plates) |
-| False positive rate | < 5% | ~3% |
-| System uptime | 99.9% | Docker restart policy |
-| API response time | < 100ms | ~45ms avg |
-
----
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) file for details.
-
----
-
-**Built with ❤️ for safer roads | V-Watch Traffic Management System**
+MIT License — see [LICENSE](LICENSE) for details.
