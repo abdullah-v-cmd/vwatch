@@ -1,120 +1,132 @@
 # V-Watch — AI Traffic Violation Management System
 
-An end-to-end traffic violation detection and management platform powered by YOLOv8, FastAPI, React, and PostgreSQL.
+An end-to-end traffic violation detection and management platform powered by YOLOv8, FastAPI, React, and PostgreSQL — with a **persistent backend camera system** that keeps running regardless of browser navigation.
 
 ---
 
-## Table of Contents
+## What's New — Persistent Camera Architecture
 
-- [Architecture Overview](#architecture-overview)
-- [Features](#features)
-- [Quick Start — Docker (Recommended)](#quick-start--docker-recommended)
-- [Manual Start (Development)](#manual-start-development)
-- [Default Credentials](#default-credentials)
-- [API Reference](#api-reference)
-- [Environment Variables](#environment-variables)
-- [Edge AI Module](#edge-ai-module)
-- [Admin YOLO Test](#admin-yolo-test)
-- [Troubleshooting](#troubleshooting)
+### ❌ Old Problem
+- Camera stream stopped when user navigated away from Live Monitoring page
+- Detection halted on page switch
+- Stream had to be manually restarted every time
+
+### ✅ New Solution
+- **Backend owns cameras** — each camera runs in its own Python thread inside FastAPI
+- **MJPEG streaming** — `GET /api/v1/cameras/stream/{camera_id}` serves live frames as HTTP multipart; the browser `<img>` tag simply reconnects when you return
+- **Global WebSocket** — `/api/v1/live/ws` connection persists across React page navigation
+- **Zustand store** — camera list and violation feed survive React unmounts
+- **YOLO detection** runs every 3rd frame inside the backend thread — annotated bounding boxes drawn server-side before streaming
 
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Docker Network (vwatch_net)          │
-│                                                             │
-│  ┌──────────────┐   nginx proxy    ┌──────────────────────┐ │
-│  │   Frontend   │ ───────────────► │   Backend (FastAPI)  │ │
-│  │  React+Nginx │ :3000→:80        │   Python 3.11        │ │
-│  │  Port 3000   │                  │   Port 8000          │ │
-│  └──────────────┘                  └──────────┬───────────┘ │
-│                                               │             │
-│  ┌──────────────┐                  ┌──────────▼───────────┐ │
-│  │   Edge AI    │ HTTP POST        │   PostgreSQL 16      │ │
-│  │  YOLOv8 CPU  │ ───────────────► │   Port 5432          │ │
-│  │  (--profile  │                  └──────────────────────┘ │
-│  │    edge)     │                                           │
-│  └──────────────┘                                           │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        V-Watch System                                    │
+│                                                                          │
+│  Browser (React + Vite)                                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  LiveMonitoringPage                                              │    │
+│  │  ┌─────────────┐  ┌──────────────────────────────────────────┐ │    │
+│  │  │ Camera Card │  │  <img src="/api/v1/cameras/stream/cam1"> │ │    │
+│  │  │ (Zustand)   │  │  MJPEG — browser keeps HTTP conn open    │ │    │
+│  │  └─────────────┘  └──────────────────────────────────────────┘ │    │
+│  │  ┌──────────────────────────────────────────────┐              │    │
+│  │  │  Global WebSocket  /live/ws                  │              │    │
+│  │  │  Persists across page navigation             │              │    │
+│  │  └──────────────────────────────────────────────┘              │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │  HTTP / WS                                │
+│  FastAPI Backend (Port 8000)                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  CameraManager (Singleton)                                       │    │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │    │
+│  │  │ cam_thread_1 │  │ cam_thread_2 │  │ cam_thread_N │          │    │
+│  │  │ OpenCV+YOLO  │  │ OpenCV+YOLO  │  │ OpenCV+YOLO  │          │    │
+│  │  │ ─ Webcam     │  │ ─ RTSP       │  │ ─ HTTP MJPEG │          │    │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │    │
+│  │         │                 │                  │                   │    │
+│  │  MJPEG Endpoints          │            WebSocket Broadcast       │    │
+│  │  /cameras/stream/{id}     └────────────────► /live/ws           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                              │                                           │
+│  PostgreSQL 16 (Port 5432)   │                                           │
+│  ┌───────────────────────────▼────────────────────────────────────┐     │
+│  │  violations · users · audit_logs · system_config               │     │
+│  └────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Services:**
-| Service | Image | Port | Description |
-|---------|-------|------|-------------|
-| `postgres` | postgres:16-alpine | 5432 | Database |
-| `backend` | ./backend | 8000 | FastAPI REST + WebSocket |
-| `frontend` | ./frontend | 3000→80 | React (nginx) |
-| `edge_ai` | ./edge_ai | — | YOLOv8 detection (opt-in) |
+### Services
+| Service | Port | Description |
+|---------|------|-------------|
+| `backend` | 8000 | FastAPI REST + WebSocket + MJPEG streams |
+| `frontend` | 3000 | React (Vite / nginx) |
+| `postgres` | 5432 | PostgreSQL 16 |
+| `edge_ai` | — | YOLOv8 edge detection (optional) |
 
 ---
 
 ## Features
 
-- **AI Detection** – YOLOv8n vehicle detection with bounding boxes (singleton model, loaded once)
-- **Live Monitoring** – Real-time webcam/CCTV feeds with canvas bbox overlay; streams survive page navigation
-- **WebSocket feed** – Violations appear instantly on the Violations page and Live Monitoring feed
-- **Violations workflow** – Pending → Approve / Reject with remarks and fine management
-- **Admin YOLO Test** – Upload a video file and run YOLO detection directly from the browser
-- **Evidence integrity** – SHA-256 hash verification for every uploaded frame/plate/video
-- **RBAC** – Admin, Traffic Police, and Viewer roles with JWT authentication
-- **Edge AI** – Standalone Python module streams from webcam/RTSP, submits violations to backend with offline buffering
-- **Docker-ready** – Single `docker compose up` starts the full stack
+### Persistent Camera System (New)
+- ✅ **Backend camera threads** — cameras run in `threading.Thread`, completely independent of frontend
+- ✅ **MJPEG streaming** — `multipart/x-mixed-replace` served over plain HTTP; no WebRTC/WebSocket needed for video
+- ✅ **Per-camera WebSocket** — `WS /api/v1/cameras/ws/{camera_id}` pushes base64 JPEG frames for canvas overlay use cases
+- ✅ **Auto-reconnect RTSP** — backend thread reconnects to RTSP/HTTP streams on failure
+- ✅ **Server-side YOLO** — detection + bounding boxes drawn in backend, streamed in MJPEG
+- ✅ **Frontend survives navigation** — `<img>` tag with MJPEG URL simply re-renders; stream never stopped
+- ✅ **Zustand persistence** — camera list + violation feed persist in localStorage across page refreshes
+
+### Existing Features
+- **AI Detection** — YOLOv8n vehicle detection (singleton, loaded once; mock mode if not installed)
+- **Live Violation Feed** — WebSocket broadcast to all dashboard tabs instantly
+- **Multi-Camera Support** — unlimited cameras, each with independent ID and stream endpoint
+- **Violations Workflow** — Pending → Approve / Reject with fine management
+- **Admin YOLO Test** — upload video, run detection, inspect results
+- **Evidence Integrity** — SHA-256 hash verification for every uploaded file
+- **RBAC** — Admin, Traffic Police, Viewer roles with JWT
+- **Edge AI** — standalone module with DeepSORT, ANPR, offline buffering
+- **Docker-ready** — single `docker compose up` starts everything
 
 ---
 
 ## Quick Start — Docker (Recommended)
 
 ### Prerequisites
-
 - Docker ≥ 24 and Docker Compose ≥ 2.20
 - 4 GB RAM free
 
 ### 1. Clone and configure
-
 ```bash
 git clone https://github.com/abdullah-v-cmd/vwatch.git
 cd vwatch
-
-# Optional: override the JWT secret (strongly recommended for production)
-echo 'SECRET_KEY=your_random_32_char_secret_here' > .env
+cp backend/.env.example backend/.env
+# Optional: set SECRET_KEY in backend/.env
 ```
 
-### 2. Start core services
-
+### 2. Start all services
 ```bash
 docker compose up -d
 ```
 
-This starts **postgres**, **backend**, and **frontend**.
-
 | URL | Service |
 |-----|---------|
 | http://localhost:3000 | Frontend dashboard |
-| http://localhost:8000/docs | Backend API docs (Swagger) |
+| http://localhost:8000/docs | Swagger API docs |
 | http://localhost:8000/redoc | ReDoc |
 
-### 3. (Optional) Start Edge AI with webcam
-
-> Requires a webcam attached to the host. On Windows/Mac, comment out the `devices` section in `docker-compose.yml`.
-
+### 3. (Optional) Start Edge AI
 ```bash
 docker compose --profile edge up -d edge_ai
 ```
 
 ### 4. Stop everything
-
 ```bash
-docker compose down          # stop containers
-docker compose down -v       # stop + delete all data volumes
-```
-
-### Rebuilding after code changes
-
-```bash
-docker compose build --no-cache
-docker compose up -d
+docker compose down
+docker compose down -v   # also delete DB volume
 ```
 
 ---
@@ -122,83 +134,46 @@ docker compose up -d
 ## Manual Start (Development)
 
 ### Prerequisites
-
 - Python 3.11+
 - Node.js 20+
 - PostgreSQL 16 running locally
 
 ### 1. Database
-
 ```bash
-# Create database and user
 psql -U postgres <<'SQL'
 CREATE USER vwatch WITH PASSWORD 'vwatch_pass';
 CREATE DATABASE vwatch_db OWNER vwatch;
 SQL
-
-# Apply schema
 psql -U vwatch -d vwatch_db < scripts/init_db.sql
 ```
 
 ### 2. Backend
-
 ```bash
 cd backend
-
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
+# For real YOLO detection (optional):
+pip install ultralytics
 
-# Configure environment
 cp .env.example .env
-# Edit .env: set DATABASE_URL, DATABASE_URL_SYNC, SECRET_KEY
+# Edit .env: set DATABASE_URL, SECRET_KEY
 
-# Start development server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Backend available at: http://localhost:8000  
-Swagger docs at: http://localhost:8000/docs
+Backend: http://localhost:8000  
+Swagger: http://localhost:8000/docs
 
 ### 3. Frontend
-
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start development server (proxies /api → localhost:8000)
 npm run dev
 ```
 
-Frontend available at: http://localhost:3000
-
-### 4. Edge AI (optional)
-
-```bash
-cd edge_ai
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install CPU-only dependencies (no GPU required)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
-
-# Run with default webcam
-python main.py --config config/edge_config.json
-
-# Run without display (headless / server)
-python main.py --config config/edge_config.json --no-display
-
-# Run on a video file for testing
-python main.py --source /path/to/video.mp4 --no-display
-```
+Frontend: http://localhost:5173
 
 ---
 
@@ -208,14 +183,26 @@ python main.py --source /path/to/video.mp4 --no-display
 |------|----------|----------|
 | Admin | `admin` | `Admin@123!` |
 
-> The default admin is created automatically on first startup.
-> Change the password immediately in production via: **Profile → Change Password**.
-
 ---
 
 ## API Reference
 
-All endpoints are prefixed with `/api/v1`. Interactive docs available at `/docs`.
+All endpoints prefixed with `/api/v1`. Full interactive docs at `/docs`.
+
+### Persistent Camera System (NEW)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/cameras` | Police | List all backend cameras with live state |
+| POST | `/cameras` | Police | Register + auto-start a camera |
+| POST | `/cameras/{id}/start` | Police | Start capture thread |
+| POST | `/cameras/{id}/stop` | Police | Stop capture thread (config retained) |
+| POST | `/cameras/{id}/restart` | Police | Stop then start |
+| DELETE | `/cameras/{id}` | Police | Stop + permanently remove |
+| GET | `/cameras/{id}/status` | Police | Single camera live status |
+| GET | `/cameras/system/status` | Police | Full system summary |
+| **GET** | **`/cameras/stream/{id}`** | **None** | **MJPEG live stream (embed as `<img>`!)** |
+| WS | `/cameras/ws/{id}` | None | Per-camera base64 JPEG frame push |
 
 ### Authentication
 
@@ -227,12 +214,25 @@ All endpoints are prefixed with `/api/v1`. Interactive docs available at `/docs`
 | POST | `/auth/change-password` | Bearer | Change password |
 | POST | `/auth/logout` | Bearer | Logout |
 
+### Live Monitoring (WebSocket + REST)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| WS | `/live/ws` | None | Global violation + camera event feed |
+| POST | `/live/violations/report` | None | Submit live violation (saves to DB + broadcasts) |
+| POST | `/live/cameras/status` | None | Update camera status |
+| GET | `/live/cameras` | Police | List cameras (backend + DB merged) |
+| POST | `/live/cameras` | Police | Add camera (registers in backend manager + DB) |
+| DELETE | `/live/cameras/{id}` | Police | Remove camera |
+| GET | `/live/stats` | Police | Live statistics |
+| GET | `/live/recent-violations` | Police | Recent violations list |
+| GET | `/live/ws/count` | None | WebSocket client count |
+
 ### Violations
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/violations` | None | Submit violation (Edge AI) |
-| POST | `/violations/manual` | Police | Manually create violation |
 | GET | `/violations` | Police | List with filters & pagination |
 | GET | `/violations/stats` | Police | Dashboard statistics |
 | GET | `/violations/{id}` | Police | Get single violation |
@@ -241,20 +241,6 @@ All endpoints are prefixed with `/api/v1`. Interactive docs available at `/docs`
 | POST | `/violations/{id}/files` | None | Upload evidence files |
 | GET | `/violations/{id}/files/{filename}` | None | Serve evidence file |
 | POST | `/violations/{id}/verify-integrity` | Police | Verify SHA-256 hashes |
-
-### Live Monitoring
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| WS | `/live/ws` | None | WebSocket feed |
-| POST | `/live/violations/report` | None | Report + save live violation |
-| POST | `/live/cameras/status` | None | Update camera status |
-| GET | `/live/cameras` | Police | List configured cameras |
-| POST | `/live/cameras` | Police | Add camera |
-| DELETE | `/live/cameras/{id}` | Police | Remove camera |
-| GET | `/live/stats` | Police | Live statistics |
-| GET | `/live/recent-violations` | Police | Recent violations |
-| GET | `/live/ws/count` | None | WebSocket client count |
 
 ### YOLO Analysis
 
@@ -273,160 +259,113 @@ All endpoints are prefixed with `/api/v1`. Interactive docs available at `/docs`
 | PATCH | `/users/{id}` | Admin | Update user |
 | DELETE | `/users/{id}` | Admin | Deactivate user |
 
-### Config & Audit (Admin only)
+---
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/config` | Admin | List config keys |
-| PUT | `/config` | Admin | Upsert config key |
-| DELETE | `/config/{key}` | Admin | Delete config key |
-| GET | `/audit-logs` | Admin | Audit log with filters |
+## How the Persistent Camera System Works
+
+### Backend: `CameraManager` Singleton
+
+```python
+# backend/app/services/camera_manager.py
+
+class CameraManager:
+    """
+    Each camera runs in its own daemon thread.
+    Threads are started at app startup and persist
+    for the entire lifetime of the FastAPI process.
+    """
+
+    def start_camera(self, camera_id: str):
+        thread = threading.Thread(target=_camera_thread, args=(cam, broadcast))
+        thread.daemon = True
+        thread.start()   # Never stops when frontend disconnects
+```
+
+### MJPEG Stream Flow
+
+```
+Backend thread (Python)          Browser (<img> tag)
+        │                                │
+        ├─ cv2.read() frame              │
+        ├─ YOLO detect + draw bbox       │
+        ├─ cv2.imencode JPEG             │
+        ├─ cam.set_frame(jpeg)           │
+        │                                │
+        ▼                                ▼
+GET /cameras/stream/{id}    ◄────── img src="/api/v1/cameras/stream/cam1"
+        │                                │
+        ├─ StreamingResponse             ├─ Browser reads multipart chunks
+        ├─ multipart/x-mixed-replace     ├─ Renders as live video
+        └─ Yields frame bytes ───────────►│
+                                         │
+             [user navigates away]        │
+             [user comes back]            │
+                                         │
+                              img re-renders same URL
+                              Backend stream: still running ✅
+```
+
+### Frontend: No Camera Control on Page Unmount
+
+```typescript
+// The MJPEG URL is just a string — React doesn't "own" the connection
+<img src={`/api/v1/cameras/stream/${cam.camera_id}`} />
+
+// When user leaves the page, React unmounts the <img>
+// The browser closes this particular HTTP response reader
+// BUT the backend thread keeps capturing + YOLO detecting
+
+// When user returns, React mounts the <img> again
+// The <img> sends a NEW GET request to the same URL
+// Backend immediately starts streaming from the latest frame
+// → Instant reconnect, zero state loss
+```
+
+### Global WebSocket (Violation Feed)
+
+```typescript
+// utils/api.ts
+let _globalWs: LiveMonitoringWebSocket | null = null
+
+export function getGlobalWs(): LiveMonitoringWebSocket {
+  if (!_globalWs) {
+    _globalWs = new LiveMonitoringWebSocket()
+    _globalWs.connect()         // connects ONCE for entire app session
+  }
+  return _globalWs              // same instance returned on every call
+}
+
+// In LiveMonitoringPage:
+const ws = getGlobalWs()        // always the same WS connection
+ws.onViolation = (data) => { ... }  // just update the callback
+
+// On page unmount:
+// ws.onViolation = null  (clear callbacks)
+// DO NOT call ws.destroy() — WS must stay connected!
+```
 
 ---
 
 ## Environment Variables
 
-### Backend
+### Backend (`backend/.env`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql+asyncpg://vwatch:vwatch_pass@localhost:5432/vwatch_db` | Async DB URL |
 | `DATABASE_URL_SYNC` | `postgresql://vwatch:vwatch_pass@localhost:5432/vwatch_db` | Sync DB URL |
-| `SECRET_KEY` | auto-generated | JWT signing key (set in production!) |
-| `DEBUG` | `false` | Enable debug mode |
-| `UPLOAD_DIR` | `/app/uploads` | Evidence file storage path |
-| `ALLOWED_ORIGINS` | `["*"]` | CORS allowed origins |
+| `SECRET_KEY` | auto-generated | JWT signing key |
+| `UPLOAD_DIR` | `/app/uploads` | Evidence file storage |
 | `YOLO_MODEL_PATH` | `yolov8n.pt` | YOLO model file |
 | `YOLO_DEVICE` | `cpu` | `cpu` or `cuda` |
-| `SMTP_HOST` | `smtp.gmail.com` | SMTP server |
-| `SMTP_USER` | `` | SMTP username |
-| `SMTP_PASSWORD` | `` | SMTP password |
+| `ALLOWED_ORIGINS` | `["*"]` | CORS allowed origins |
 
 ### Frontend (build-time)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VITE_API_URL` | `/api/v1` (Docker) / `http://localhost:8000/api/v1` (dev) | Backend API base URL |
-| `VITE_WS_URL` | `ws://localhost/api/v1` (Docker) / `ws://localhost:8000/api/v1` (dev) | WebSocket base URL |
-
-### Edge AI
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKEND_URL` | `http://localhost:8000` | Backend URL (use `http://backend:8000` in Docker) |
-| `CAMERA_SOURCE` | `0` | Video source (0=webcam, or RTSP URL) |
-| `CAMERA_ID` | `CAM_001` | Camera identifier |
-| `LOCATION` | `Main Street Camera` | Camera location label |
-| `YOLO_MODEL_PATH` | `yolov8n.pt` | YOLO model |
-| `YOLO_DEVICE` | `cpu` | Device |
-| `DISPLAY` | `true` | Show OpenCV window |
-
----
-
-## Edge AI Module
-
-The Edge AI module (`edge_ai/`) processes video streams and automatically submits violations to the backend.
-
-### How it works
-
-1. **Video stream** — OpenCV reads webcam, RTSP, or file source
-2. **YOLO detection** — Single YOLOv8 model instance detects vehicles (singleton pattern, loaded once)
-3. **DeepSORT tracking** — Assigns persistent IDs across frames
-4. **Violation analysis** — Speed, red-light, wrong direction, lane change detection
-5. **ANPR** — License plate recognition via EasyOCR + Tesseract
-6. **Evidence** — Frame, plate, video clip saved to `evidence_store/`
-7. **API submission** — POSTs to `POST /api/v1/violations`, uploads files, broadcasts to WebSocket
-8. **Offline buffering** — Queued to `offline_buffer.jsonl` if backend unreachable
-
-### Evidence upload flow
-
-```
-Edge AI                           Backend
-  │                                  │
-  ├─ POST /api/v1/violations ───────►│ Creates PENDING record → returns {id}
-  │                                  │
-  ├─ POST /api/v1/violations/{id}/files ──► Saves frame.jpg, plate.jpg, clip.mp4
-  │                                  │
-  └─ POST /api/v1/live/violations/report ──► Broadcasts to WebSocket clients
-```
-
----
-
-## Admin YOLO Test
-
-The **YOLO Test** page (Admin sidebar → "YOLO Test") lets you:
-
-1. Check whether the YOLO model is loaded or running in mock mode
-2. Upload a video (MP4, AVI, MOV, MKV, WebM — max 200 MB)
-3. Set confidence threshold and camera metadata
-4. Run YOLOv8 detection — results show per-frame bounding boxes, class breakdown, thumbnail
-5. Optionally save detected vehicles as PENDING violation records
-
-**Mock mode**: If `ultralytics` is not installed in the backend container, the system runs in mock mode — all API flows work identically but detections are simulated placeholder boxes.
-
-To enable real YOLO detection in the backend container:
-```bash
-docker compose exec backend pip install ultralytics
-docker compose restart backend
-```
-
----
-
-## Troubleshooting
-
-### Backend fails to start
-
-```bash
-# Check logs
-docker compose logs backend --tail=50
-
-# Most common: database not ready yet
-docker compose restart backend
-```
-
-### WebSocket connection fails
-
-- In Docker: nginx is configured to proxy WebSocket at `/api/v1/live/ws` with correct `Upgrade` headers
-- In dev: vite proxy handles WebSocket (`ws: true` in `vite.config.ts`)
-- Check browser console for connection errors
-
-### Evidence files not found (404)
-
-- Backend serves files at `/api/v1/violations/{id}/files/{filename}`
-- In Docker, both backend and edge_ai share the `evidence_store` volume
-- Verify the volume is mounted: `docker compose exec backend ls /app/uploads`
-
-### YOLO model not loading
-
-```bash
-# Backend logs show whether ultralytics loaded
-docker compose logs backend | grep YOLO
-
-# Install manually inside running container
-docker compose exec backend pip install ultralytics
-docker compose restart backend
-```
-
-### Camera permission denied (webcam)
-
-- Browser must have camera permission granted
-- In Chrome: click the camera icon in the address bar → Allow
-- HTTPS is required for camera access on deployed (non-localhost) sites
-
-### Violations not appearing on Violations page
-
-- Violations are saved to DB by `POST /live/violations/report` (live webcam) or `POST /violations` (edge AI)
-- The Violations page auto-refreshes via WebSocket when new violations arrive
-- Click **Refresh** button or the blue "N new — click to refresh" banner
-
-### Docker containers can't communicate
-
-All services must be on the `vwatch_net` bridge network. Verify:
-```bash
-docker network inspect vwatch_vwatch_net
-```
-
-The edge_ai uses `http://backend:8000` (Docker service name, not `localhost`).
+| `VITE_API_URL` | `http://localhost:8000/api/v1` | Backend API base URL |
+| `VITE_WS_URL` | `ws://localhost:8000/api/v1` | WebSocket base URL |
 
 ---
 
@@ -434,44 +373,133 @@ The edge_ai uses `http://backend:8000` (Docker service name, not `localhost`).
 
 ```
 vwatch/
-├── backend/                    # FastAPI backend
+├── backend/                        # FastAPI backend
 │   ├── app/
-│   │   ├── api/               # Route handlers
+│   │   ├── api/
 │   │   │   ├── auth.py
-│   │   │   ├── violations.py  # Core violations CRUD
-│   │   │   ├── live_monitoring.py  # WebSocket + live feed
-│   │   │   ├── yolo_analysis.py    # Admin YOLO test endpoint
+│   │   │   ├── violations.py
+│   │   │   ├── live_monitoring.py  # WebSocket + live violation feed
+│   │   │   ├── camera_stream.py    # ← NEW: MJPEG + per-camera WS + lifecycle
+│   │   │   ├── yolo_analysis.py
 │   │   │   ├── users.py
 │   │   │   └── config_api.py
-│   │   ├── core/              # Config, DB, security, deps
-│   │   ├── models/            # SQLAlchemy ORM models
-│   │   ├── schemas/           # Pydantic request/response schemas
-│   │   ├── services/          # Notification service
-│   │   └── main.py            # App entry point
+│   │   ├── core/                   # Config, DB, security, deps
+│   │   ├── models/                 # SQLAlchemy ORM models
+│   │   ├── schemas/                # Pydantic schemas
+│   │   ├── services/
+│   │   │   ├── notification.py
+│   │   │   └── camera_manager.py   # ← NEW: persistent camera thread manager
+│   │   └── main.py                 # App entry point + camera startup
 │   ├── requirements.txt
 │   └── Dockerfile
-├── frontend/                  # React + Vite + Tailwind
+│
+├── frontend/                       # React + Vite + Tailwind + Zustand
 │   ├── src/
-│   │   ├── pages/             # Page components
-│   │   ├── components/        # Layout, shared UI
-│   │   ├── store/             # Zustand auth store
-│   │   └── utils/             # Axios API client, WebSocket
-│   ├── nginx.conf             # Nginx with WS proxy
+│   │   ├── pages/
+│   │   │   └── LiveMonitoringPage.tsx  # ← REWRITTEN: MJPEG display + backend control
+│   │   ├── components/Layout.tsx
+│   │   ├── store/
+│   │   │   ├── authStore.ts
+│   │   │   └── cameraStore.ts      # ← NEW: Zustand persistent camera state
+│   │   └── utils/
+│   │       └── api.ts              # ← UPDATED: cameraApi + global WS singleton
 │   └── Dockerfile
-├── edge_ai/                   # YOLOv8 edge detection module
-│   ├── main.py                # Engine orchestrator
-│   ├── detectors/             # YOLO singleton vehicle detector
-│   ├── trackers/              # DeepSORT multi-object tracker
-│   ├── violations/            # Speed, red-light, direction detectors
-│   ├── anpr/                  # License plate recognition
-│   ├── evidence/              # Evidence generation
-│   └── utils/                 # API client (with offline buffer)
+│
+├── edge_ai/                        # YOLOv8 edge detection module
 ├── config/
-│   └── edge_config.json       # Edge AI configuration
+│   └── edge_config.json
 ├── scripts/
-│   └── init_db.sql            # Database initialization
+│   └── init_db.sql
 └── docker-compose.yml
 ```
+
+---
+
+## Testing the Persistent Stream
+
+### Quick Test via curl
+```bash
+# 1. Start the backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 2. Register a webcam
+curl -X POST http://localhost:8000/api/v1/cameras \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"camera_id":"cam1","name":"Test Webcam","source":"0","source_type":"webcam","auto_start":true}'
+
+# 3. Check it's running
+curl http://localhost:8000/api/v1/cameras/cam1/status \
+  -H "Authorization: Bearer $TOKEN"
+# → {"state": "running", "fps": 29.5, ...}
+
+# 4. Open the MJPEG stream in browser
+# http://localhost:8000/api/v1/cameras/stream/cam1
+# (No auth required for stream endpoint)
+
+# 5. Navigate to another page in the frontend — stream continues
+# 6. Return — stream reconnects instantly
+```
+
+### WebSocket Violation Events
+```javascript
+const ws = new WebSocket('ws://localhost:8000/api/v1/live/ws')
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data)
+  if (msg.type === 'violation') {
+    console.log('🚨 Violation:', msg.data)
+  }
+  if (msg.type === 'connected') {
+    console.log('📹 Backend cameras:', msg.cameras)
+  }
+}
+```
+
+---
+
+## Troubleshooting
+
+### Camera state stuck at "starting"
+```bash
+# Check backend logs
+docker compose logs backend --tail=50
+
+# Try restart via API
+curl -X POST http://localhost:8000/api/v1/cameras/cam1/restart \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### MJPEG stream shows "Camera Offline" placeholder
+- Camera thread failed to open the source (check `error_message` field in status)
+- For webcam: ensure no other process is using device 0
+- For RTSP: verify the URL and network connectivity from the backend server
+
+### WebSocket not receiving violations
+```bash
+# Check WS client count
+curl http://localhost:8000/api/v1/live/ws/count
+# Should be ≥ 1 if browser is connected
+
+# Check backend WS logs
+docker compose logs backend | grep '\[WS\]'
+```
+
+### YOLO running in mock mode
+```bash
+# Install ultralytics in running container
+docker compose exec backend pip install ultralytics
+docker compose restart backend
+
+# Check status
+curl http://localhost:8000/api/v1/yolo/status \
+  -H "Authorization: Bearer $TOKEN"
+# → {"running": true, "model_name": "yolov8n.pt", "mock_mode": false}
+```
+
+### Frontend stream not loading after navigation
+- This should be automatic — the `<img>` tag re-requests the MJPEG URL
+- If it shows blank: press the ↺ Restart button on the camera card to force a new stream key
+- Ensure CORS allows the frontend origin in `ALLOWED_ORIGINS`
 
 ---
 
