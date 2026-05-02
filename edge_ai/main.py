@@ -10,6 +10,7 @@ import argparse
 import json
 import signal
 import sys
+import numpy as np
 from pathlib import Path
 
 # Configure logging
@@ -165,8 +166,10 @@ class VWatchEdgeEngine:
             # Extract vehicle crop
             x1, y1, x2, y2 = track.bbox
             h, w = frame.shape[:2]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
+            x1, y1 = max(0, int(x1)), max(0, int(y1))
+            x2, y2 = min(w, int(x2)), min(h, int(y2))
+            if x2 <= x1 or y2 <= y1:
+                continue
             vehicle_crop = frame[y1:y2, x1:x2]
 
             # ANPR
@@ -253,12 +256,12 @@ class VWatchEdgeEngine:
         """Draw HUD overlay on frame."""
         # Draw tracks
         for track in tracks:
-            x1, y1, x2, y2 = track.bbox
+            x1, y1, x2, y2 = [int(v) for v in track.bbox]
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             label = f"ID:{track.track_id} {track.class_name}"
-            if track.speed_history:
+            if hasattr(track, 'speed_history') and track.speed_history:
                 label += f" {sum(track.speed_history)/len(track.speed_history):.0f}km/h"
-            cv2.putText(frame, label, (x1, y1 - 5),
+            cv2.putText(frame, label, (x1, max(y1 - 5, 15)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Red-light overlay
@@ -283,6 +286,13 @@ class VWatchEdgeEngine:
         self.stream.start()
         self.api_client.start()
         self._running = True
+
+        # Notify backend that camera is active
+        self.api_client.update_camera_status(
+            camera_id=self.config["camera_id"],
+            status="active",
+            message="Edge AI engine started",
+        )
 
         logger.info("[Engine] Processing loop started. Press 'q' to quit.")
 
@@ -351,6 +361,15 @@ class VWatchEdgeEngine:
     def stop(self):
         """Gracefully stop all components."""
         self._running = False
+        # Notify backend that camera is stopping
+        try:
+            self.api_client.update_camera_status(
+                camera_id=self.config["camera_id"],
+                status="idle",
+                message="Edge AI engine stopped",
+            )
+        except Exception:
+            pass
         self.stream.stop()
         self.api_client.stop()
         cv2.destroyAllWindows()
@@ -358,8 +377,6 @@ class VWatchEdgeEngine:
 
 
 def main():
-    import numpy as np
-
     parser = argparse.ArgumentParser(description="V-Watch Edge AI Module")
     parser.add_argument("--config", default="config/edge_config.json",
                         help="Path to configuration file")

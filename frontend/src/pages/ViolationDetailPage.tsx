@@ -6,6 +6,10 @@ import toast from 'react-hot-toast'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 
+const API_BASE = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace('/api/v1', '')
+  : 'http://localhost:8000'
+
 const ViolationDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -14,6 +18,7 @@ const ViolationDetailPage: React.FC = () => {
   const [integrity, setIntegrity] = useState<any>(null)
   const [verifying, setVerifying] = useState(false)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  const [reviewing, setReviewing] = useState(false)
 
   useEffect(() => {
     if (id) fetchViolation()
@@ -47,6 +52,34 @@ const ViolationDetailPage: React.FC = () => {
     }
   }
 
+  const handleApprove = async () => {
+    setReviewing(true)
+    try {
+      await violationsApi.approve(violation.id, 'Approved by officer')
+      toast.success('Violation approved')
+      fetchViolation()
+    } catch {
+      toast.error('Failed to approve')
+    } finally {
+      setReviewing(false)
+    }
+  }
+
+  const handleReject = async () => {
+    const reason = prompt('Rejection reason (required):')
+    if (!reason?.trim()) return
+    setReviewing(true)
+    try {
+      await violationsApi.reject(violation.id, reason)
+      toast.success('Violation rejected')
+      fetchViolation()
+    } catch {
+      toast.error('Failed to reject')
+    } finally {
+      setReviewing(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -70,7 +103,7 @@ const ViolationDetailPage: React.FC = () => {
     { label: 'Evidence ID', value: violation.evidence_id },
     { label: 'Vehicle ID', value: violation.vehicle_id },
     { label: 'Plate Number', value: <span className="font-mono font-bold text-lg">{violation.plate_number}</span> },
-    { label: 'Violation Type', value: violation.violation_type?.replace('_', ' ') },
+    { label: 'Violation Type', value: violation.violation_type?.replace(/_/g, ' ') },
     { label: 'Status', value: <span className={`badge-${violation.status}`}>{violation.status}</span> },
     { label: 'Speed Recorded', value: violation.speed_recorded ? `${violation.speed_recorded} km/h` : 'N/A' },
     { label: 'Speed Limit', value: violation.speed_limit ? `${violation.speed_limit} km/h` : 'N/A' },
@@ -82,6 +115,12 @@ const ViolationDetailPage: React.FC = () => {
     { label: 'Fine Paid', value: violation.fine_paid ? '✅ Yes' : '❌ No' },
     { label: 'Reviewer Remarks', value: violation.reviewer_remarks || '-' },
   ]
+
+  const getImageUrl = (relativeUrl: string) => {
+    if (!relativeUrl) return ''
+    if (relativeUrl.startsWith('http')) return relativeUrl
+    return `${API_BASE}${relativeUrl}`
+  }
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -117,18 +156,22 @@ const ViolationDetailPage: React.FC = () => {
               <Image className="w-5 h-5 text-blue-400" />
               Evidence Files
             </h3>
+            {!violation.frame_image_url && !violation.plate_image_url && (
+              <p className="text-gray-500 text-sm">No evidence files uploaded yet.</p>
+            )}
             <div className="grid grid-cols-2 gap-4">
               {violation.frame_image_url && (
                 <div
                   className="relative cursor-pointer rounded-lg overflow-hidden border border-gray-700 hover:border-blue-500 transition-colors"
-                  onClick={() => setLightboxUrl(`http://localhost:8000${violation.frame_image_url}`)}
+                  onClick={() => setLightboxUrl(getImageUrl(violation.frame_image_url))}
                 >
                   <img
-                    src={`http://localhost:8000${violation.frame_image_url}`}
+                    src={getImageUrl(violation.frame_image_url)}
                     alt="Violation Frame"
                     className="w-full h-36 object-cover"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iIzFmMjkzNyIvPjx0ZXh0IHg9IjEwMCIgeT0iNzUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzZiNzI4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gSW1hZ2U8L3RleHQ+PC9zdmc+'
+                      (e.target as HTMLImageElement).src =
+                        'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iIzFmMjkzNyIvPjx0ZXh0IHg9IjEwMCIgeT0iNzUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzZiNzI4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gSW1hZ2U8L3RleHQ+PC9zdmc+'
                     }}
                   />
                   <div className="absolute bottom-2 left-2 bg-black/70 rounded px-1.5 py-0.5 text-xs text-gray-300">
@@ -139,14 +182,15 @@ const ViolationDetailPage: React.FC = () => {
               {violation.plate_image_url && (
                 <div
                   className="relative cursor-pointer rounded-lg overflow-hidden border border-gray-700 hover:border-blue-500 transition-colors"
-                  onClick={() => setLightboxUrl(`http://localhost:8000${violation.plate_image_url}`)}
+                  onClick={() => setLightboxUrl(getImageUrl(violation.plate_image_url))}
                 >
                   <img
-                    src={`http://localhost:8000${violation.plate_image_url}`}
+                    src={getImageUrl(violation.plate_image_url)}
                     alt="License Plate"
                     className="w-full h-36 object-cover"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iIzFmMjkzNyIvPjx0ZXh0IHg9IjEwMCIgeT0iNzUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzZiNzI4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gSW1hZ2U8L3RleHQ+PC9zdmc+'
+                      (e.target as HTMLImageElement).src =
+                        'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgZmlsbD0iIzFmMjkzNyIvPjx0ZXh0IHg9IjEwMCIgeT0iNzUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzZiNzI4MCIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gSW1hZ2U8L3RleHQ+PC9zdmc+'
                     }}
                   />
                   <div className="absolute bottom-2 left-2 bg-black/70 rounded px-1.5 py-0.5 text-xs text-gray-300">
@@ -207,36 +251,20 @@ const ViolationDetailPage: React.FC = () => {
               <h3 className="text-base font-semibold text-white mb-3">Quick Actions</h3>
               <div className="space-y-2">
                 <button
-                  onClick={async () => {
-                    try {
-                      await violationsApi.approve(violation.id, 'Approved by officer')
-                      toast.success('Violation approved')
-                      fetchViolation()
-                    } catch {
-                      toast.error('Failed to approve')
-                    }
-                  }}
-                  className="btn-success w-full justify-center text-sm"
+                  onClick={handleApprove}
+                  disabled={reviewing}
+                  className="btn-success w-full justify-center text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <CheckCircle className="w-4 h-4" />
-                  Approve
+                  {reviewing ? 'Processing...' : 'Approve'}
                 </button>
                 <button
-                  onClick={async () => {
-                    const reason = prompt('Rejection reason:')
-                    if (!reason) return
-                    try {
-                      await violationsApi.reject(violation.id, reason)
-                      toast.success('Violation rejected')
-                      fetchViolation()
-                    } catch {
-                      toast.error('Failed to reject')
-                    }
-                  }}
-                  className="btn-danger w-full justify-center text-sm"
+                  onClick={handleReject}
+                  disabled={reviewing}
+                  className="btn-danger w-full justify-center text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <XCircle className="w-4 h-4" />
-                  Reject
+                  {reviewing ? 'Processing...' : 'Reject'}
                 </button>
               </div>
             </div>
@@ -257,7 +285,7 @@ const ViolationDetailPage: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           />
           <button
-            className="absolute top-4 right-4 text-white hover:text-red-400 p-2"
+            className="absolute top-4 right-4 text-white hover:text-red-400 p-2 text-2xl"
             onClick={() => setLightboxUrl(null)}
           >
             ✕

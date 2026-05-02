@@ -9,6 +9,7 @@ import ViolationDetailPage from './pages/ViolationDetailPage'
 import UsersPage from './pages/UsersPage'
 import ConfigPage from './pages/ConfigPage'
 import AuditLogsPage from './pages/AuditLogsPage'
+import LiveMonitoringPage from './pages/LiveMonitoringPage'
 import Layout from './components/Layout'
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; adminOnly?: boolean }> = ({
@@ -53,6 +54,7 @@ function App() {
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="violations" element={<ViolationsPage />} />
           <Route path="violations/:id" element={<ViolationDetailPage />} />
+          <Route path="live-monitoring" element={<LiveMonitoringPage />} />
           <Route
             path="users"
             element={

@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, AlertTriangle, Users, Settings,
-  FileText, LogOut, Menu, X, Shield, Camera, Bell
+  FileText, LogOut, Menu, X, Shield, Camera, Bell, Video
 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { authApi } from '../utils/api'
@@ -11,6 +11,7 @@ import clsx from 'clsx'
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/live-monitoring', icon: Video, label: 'Live Monitoring' },
   { to: '/violations', icon: AlertTriangle, label: 'Violations' },
   { to: '/users', icon: Users, label: 'Users', adminOnly: true },
   { to: '/config', icon: Settings, label: 'Configuration', adminOnly: true },
