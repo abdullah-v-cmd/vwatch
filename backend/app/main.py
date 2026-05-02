@@ -15,7 +15,7 @@ from .core.config import settings
 from .core.database import create_tables
 from .core.security import PasswordHasher
 from .models.user import User, UserRole
-from .api import auth, violations, users, config_api, live_monitoring
+from .api import auth, violations, users, config_api, live_monitoring, yolo_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -44,20 +44,25 @@ async def create_default_admin(db):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     logger.info("🚀 V-Watch Backend starting...")
     try:
         await create_tables()
         logger.info("✅ Database tables created/verified")
-
-        # Create default admin
         from .core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             await create_default_admin(db)
     except Exception as e:
         logger.warning(f"⚠️  Database setup failed (may need PostgreSQL): {e}")
 
-    # Create upload directory
-    Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+    # Create upload directories
+    upload_path = Path(settings.UPLOAD_DIR)
+    upload_path.mkdir(parents=True, exist_ok=True)
+    (upload_path / "yolo_temp").mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ Upload dir ready: {upload_path.resolve()}")
     logger.info("✅ V-Watch Backend ready")
 
     yield
@@ -71,18 +76,19 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="""
-    **V-Watch Traffic Violation Management API**
+**V-Watch Traffic Violation Management API**
 
-    Centralized backend for AI-powered traffic violation detection.
+Centralized backend for AI-powered traffic violation detection.
 
-    ## Features
-    * JWT Authentication with RBAC
-    * Violation submission from Edge AI
-    * Human verification workflow
-    * Evidence integrity verification (SHA-256)
-    * Live monitoring with WebSocket
-    * Notification system
-    """,
+## Features
+* JWT Authentication with RBAC
+* Violation submission from Edge AI (no auth required for POST /violations)
+* Human verification workflow (approve / reject)
+* Evidence integrity verification (SHA-256)
+* Live monitoring with WebSocket
+* YOLO model status & admin video analysis
+* Notification system
+""",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -91,10 +97,16 @@ app = FastAPI(
 # ─── Middleware ────────────────────────────────────────────────────────────────
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Allow all origins so both Docker and local dev work without env changes.
+# Restrict to specific domains in production via ALLOWED_ORIGINS env var.
+_origins = settings.ALLOWED_ORIGINS
+_allow_all = "*" in _origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"] if _allow_all else _origins,
+    allow_credentials=False if _allow_all else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -104,7 +116,7 @@ app.add_middleware(
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
@@ -130,6 +142,7 @@ app.include_router(violations.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(config_api.router, prefix=API_PREFIX)
 app.include_router(live_monitoring.router, prefix=API_PREFIX)
+app.include_router(yolo_analysis.router, prefix=API_PREFIX)
 
 # Static files for uploaded evidence
 uploads_path = Path(settings.UPLOAD_DIR)
@@ -137,7 +150,7 @@ uploads_path.mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 
 
-# ─── Health Check ─────────────────────────────────────────────────────────────
+# ─── Health / Root ────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Health"])
 async def health_check():

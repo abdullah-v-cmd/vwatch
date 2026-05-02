@@ -37,32 +37,46 @@ from utils.api_client import ViolationAPIClient
 
 
 def load_config(config_path: str) -> dict:
-    """Load configuration from JSON file."""
+    """Load configuration from JSON file, with environment variable overrides."""
+    import os
+
     default_config = {
-        "camera_id": "CAM_001",
-        "location": "Main Street & 1st Ave",
-        "source": 0,
+        "camera_id": os.environ.get("CAMERA_ID", "CAM_001"),
+        "location": os.environ.get("LOCATION", "Main Street & 1st Ave"),
+        "source": int(os.environ.get("CAMERA_SOURCE", 0))
+                  if os.environ.get("CAMERA_SOURCE", "0").isdigit()
+                  else os.environ.get("CAMERA_SOURCE", 0),
         "fps": 15,
         "resolution": [1280, 720],
         "speed_limit_kmh": 60.0,
-        "backend_url": "http://localhost:8000",
-        "api_key": "",
-        "output_dir": "evidence_store",
+        # BACKEND_URL env var lets Docker override without modifying the JSON config
+        "backend_url": os.environ.get("BACKEND_URL", "http://localhost:8000"),
+        "api_key": os.environ.get("API_KEY", ""),
+        # In Docker the evidence volume is mounted at /app/uploads
+        "output_dir": os.environ.get("OUTPUT_DIR", "evidence_store"),
         "save_video_clips": False,
         "stop_lines": [
             {"start": [400, 400], "end": [900, 400], "direction": "horizontal"}
         ],
         "lanes": [],
         "blur_faces": True,
-        "model_path": "yolov8n.pt",
-        "device": "cpu",
-        "display": True,
+        "model_path": os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"),
+        "device": os.environ.get("YOLO_DEVICE", "cpu"),
+        "display": os.environ.get("DISPLAY", "true").lower() not in ("false", "0", "no"),
     }
 
     if Path(config_path).exists():
         with open(config_path, "r") as f:
             user_config = json.load(f)
         default_config.update(user_config)
+
+    # Environment always wins over JSON file (allows Docker overrides)
+    if os.environ.get("BACKEND_URL"):
+        default_config["backend_url"] = os.environ["BACKEND_URL"]
+    if os.environ.get("CAMERA_ID"):
+        default_config["camera_id"] = os.environ["CAMERA_ID"]
+    if os.environ.get("LOCATION"):
+        default_config["location"] = os.environ["LOCATION"]
 
     return default_config
 

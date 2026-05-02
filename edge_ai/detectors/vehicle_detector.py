@@ -1,6 +1,6 @@
 """
 V-Watch Edge AI - Vehicle Detector
-YOLOv8/YOLOv10 vehicle detection with INT8/FP16 quantization support
+YOLOv8/YOLOv10 vehicle detection — SINGLETON pattern (one model instance).
 """
 
 import cv2
@@ -25,11 +25,53 @@ VEHICLE_CLASSES = {
 HELMET_CLASSES = {0: "helmet", 1: "no_helmet"}
 SEATBELT_CLASSES = {0: "seatbelt", 1: "no_seatbelt"}
 
+# ── Singleton YOLO model ──────────────────────────────────────────────────────
+_YOLO_INSTANCE = None
+_YOLO_MODEL_PATH = None
+_YOLO_STATUS = {
+    "loaded": False,
+    "model_path": None,
+    "device": "cpu",
+    "error": None,
+}
+
+
+def get_yolo_model(model_path: str = "yolov8n.pt", device: str = "cpu"):
+    """Return the singleton YOLO model, loading it once on first call."""
+    global _YOLO_INSTANCE, _YOLO_MODEL_PATH, _YOLO_STATUS
+
+    # If already loaded with the same model, reuse
+    if _YOLO_INSTANCE is not None and _YOLO_MODEL_PATH == model_path:
+        return _YOLO_INSTANCE
+
+    _YOLO_MODEL_PATH = model_path
+    _YOLO_STATUS.update({"loaded": False, "model_path": model_path, "device": device, "error": None})
+
+    try:
+        from ultralytics import YOLO
+        _YOLO_INSTANCE = YOLO(model_path)
+        _YOLO_STATUS["loaded"] = True
+        logger.info(f"[YOLO Singleton] Model loaded: {model_path} on {device}")
+    except ImportError:
+        _YOLO_INSTANCE = None
+        _YOLO_STATUS["error"] = "ultralytics not installed — mock mode"
+        logger.warning("[YOLO Singleton] ultralytics not installed. Mock detector active.")
+    except Exception as exc:
+        _YOLO_INSTANCE = None
+        _YOLO_STATUS["error"] = str(exc)
+        logger.error(f"[YOLO Singleton] Load error: {exc}")
+
+    return _YOLO_INSTANCE
+
+
+def get_yolo_status() -> dict:
+    return dict(_YOLO_STATUS)
+
 
 @dataclass
 class Detection:
     """Represents a single object detection."""
-    bbox: Tuple[int, int, int, int]  # x1, y1, x2, y2
+    bbox: Tuple[int, int, int, int]   # x1, y1, x2, y2
     class_id: int
     class_name: str
     confidence: float
@@ -55,9 +97,8 @@ class Detection:
 
 class VehicleDetector:
     """
-    YOLOv8/YOLOv10 vehicle detector.
+    YOLOv8/YOLOv10 vehicle detector using the singleton model.
     Falls back gracefully when ultralytics is not installed.
-    Supports model quantization for edge deployment.
     """
 
     def __init__(
@@ -75,29 +116,12 @@ class VehicleDetector:
         self.device = device
         self.use_fp16 = use_fp16
         self.target_classes = target_classes or list(VEHICLE_CLASSES.keys())
-        self.model = None
-        self._load_model()
 
-    def _load_model(self):
-        """Load YOLO model with fallback to mock for testing."""
-        try:
-            from ultralytics import YOLO
-            self.model = YOLO(self.model_path)
-            if self.use_fp16 and self.device != "cpu":
-                self.model.half()
-            logger.info(f"[VehicleDetector] Model loaded: {self.model_path} on {self.device}")
-        except ImportError:
-            logger.warning("[VehicleDetector] ultralytics not installed. Using mock detector.")
-            self.model = None
-        except Exception as e:
-            logger.error(f"[VehicleDetector] Failed to load model: {e}")
-            self.model = None
+        # Use the singleton — do NOT create a new YOLO() instance here
+        self.model = get_yolo_model(model_path=model_path, device=device)
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
-        """
-        Run detection on a frame.
-        Returns list of Detection objects for vehicles only.
-        """
+        """Run detection on a frame. Returns list of Detection objects."""
         if self.model is None:
             return self._mock_detect(frame)
 
@@ -184,6 +208,7 @@ class LicensePlateDetector:
         try:
             from ultralytics import YOLO
             if Path(self.model_path).exists():
+                # Plate detector uses its own instance (different model file)
                 self.model = YOLO(self.model_path)
                 logger.info(f"[PlateDetector] Plate model loaded: {self.model_path}")
             else:
@@ -193,10 +218,7 @@ class LicensePlateDetector:
             self.model = None
 
     def detect_plates(self, vehicle_crop: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        """
-        Detect license plates in a vehicle crop.
-        Returns list of bounding boxes (x1, y1, x2, y2).
-        """
+        """Detect license plates in a vehicle crop. Returns list of (x1,y1,x2,y2)."""
         if self.model:
             try:
                 results = self.model(vehicle_crop, conf=self.confidence_threshold, verbose=False)
@@ -210,17 +232,13 @@ class LicensePlateDetector:
             except Exception as e:
                 logger.error(f"[PlateDetector] Error: {e}")
 
-        # Fallback: OpenCV cascade classifier
         return self._cascade_detect(vehicle_crop)
 
     def _cascade_detect(self, image: np.ndarray) -> List[Tuple[int, int, int, int]]:
         """Fallback using OpenCV Haar cascade."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # Simple heuristic: lower portion of vehicle for plate
         h, w = gray.shape
         roi = gray[int(h * 0.55):, :]
-
-        # Use edge detection as plate proxy
         edges = cv2.Canny(roi, 100, 200)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         plates = []
@@ -229,4 +247,4 @@ class LicensePlateDetector:
             aspect_ratio = cw / max(ch, 1)
             if 2.0 < aspect_ratio < 6.0 and cw > 60 and ch > 15:
                 plates.append((x, y + int(h * 0.55), x + cw, y + int(h * 0.55) + ch))
-        return plates[:1]  # Return best candidate
+        return plates[:1]
