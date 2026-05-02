@@ -5,7 +5,7 @@ V-Watch Backend - Violations API Routes
 import os
 import hashlib
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from fastapi import (
     APIRouter, Depends, HTTPException, status, UploadFile, File,
@@ -13,7 +13,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update, and_, or_, desc
+from sqlalchemy import select, func, update, and_, or_, desc, text
 from sqlalchemy.orm import selectinload
 
 from ..core.database import get_db
@@ -79,6 +79,27 @@ async def create_violation(
     db.add(violation)
     await db.commit()
     await db.refresh(violation)
+
+    # Broadcast to live monitoring WebSocket clients
+    try:
+        from .live_monitoring import manager
+        await manager.broadcast({
+            "type": "violation",
+            "data": {
+                "id": violation.id,
+                "camera_id": violation.camera_id,
+                "violation_type": violation.violation_type.value,
+                "plate_number": violation.plate_number,
+                "confidence": violation.confidence,
+                "speed": violation.speed_recorded,
+                "timestamp": violation.violation_time.isoformat() if violation.violation_time else None,
+                "location": violation.location,
+                "status": violation.status.value,
+            },
+        })
+    except Exception:
+        pass  # Don't fail if WebSocket broadcast fails
+
     return violation
 
 
@@ -141,7 +162,7 @@ async def list_violations(
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=(total + page_size - 1) // page_size,
+        total_pages=max(1, (total + page_size - 1) // page_size),
     )
 
 
@@ -150,15 +171,16 @@ async def get_stats(
     current_user: User = Depends(require_police),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get violation statistics for dashboard."""
+    """Get violation statistics for dashboard including weekly chart data."""
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    total = (await db.execute(select(func.count(Violation.id)))).scalar()
-    pending = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.PENDING))).scalar()
-    approved = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.APPROVED))).scalar()
-    rejected = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.REJECTED))).scalar()
-    paid = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.PAID))).scalar()
-    today = (await db.execute(select(func.count(Violation.id)).where(Violation.violation_time >= today_start))).scalar()
+    total = (await db.execute(select(func.count(Violation.id)))).scalar() or 0
+    pending = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.PENDING))).scalar() or 0
+    approved = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.APPROVED))).scalar() or 0
+    rejected = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.REJECTED))).scalar() or 0
+    paid = (await db.execute(select(func.count(Violation.id)).where(Violation.status == ViolationStatus.PAID))).scalar() or 0
+    today = (await db.execute(select(func.count(Violation.id)).where(Violation.violation_time >= today_start))).scalar() or 0
+
     fines_result = await db.execute(
         select(func.sum(Violation.fine_amount)).where(
             and_(Violation.fine_paid == True, Violation.fine_amount != None)
@@ -173,6 +195,26 @@ async def get_stats(
     )
     violations_by_type = {str(row[0].value): row[1] for row in type_result}
 
+    # --- Weekly violations (last 7 days) ---
+    violations_by_day = []
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for i in range(6, -1, -1):
+        day_start = (today_start - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        day_count = (await db.execute(
+            select(func.count(Violation.id)).where(
+                and_(
+                    Violation.violation_time >= day_start,
+                    Violation.violation_time < day_end,
+                )
+            )
+        )).scalar() or 0
+        violations_by_day.append({
+            "date": day_names[day_start.weekday()],
+            "count": day_count,
+            "full_date": day_start.strftime("%Y-%m-%d"),
+        })
+
     return ViolationStats(
         total_violations=total,
         pending_count=pending,
@@ -182,7 +224,7 @@ async def get_stats(
         today_count=today,
         total_fines_collected=total_fines,
         violations_by_type=violations_by_type,
-        violations_by_day=[],
+        violations_by_day=violations_by_day,
     )
 
 
@@ -307,7 +349,7 @@ async def upload_violation_files(
         if len(content) > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
             raise HTTPException(status_code=413, detail=f"File too large: {file_type}")
 
-        ext = Path(upload_file.filename).suffix or ".bin"
+        ext = Path(upload_file.filename).suffix if upload_file.filename else ".bin"
         filename = f"{file_type}{ext}"
         file_path = ev_dir / filename
 

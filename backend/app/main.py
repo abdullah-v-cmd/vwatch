@@ -15,7 +15,7 @@ from .core.config import settings
 from .core.database import create_tables
 from .core.security import PasswordHasher
 from .models.user import User, UserRole
-from .api import auth, violations, users, config_api
+from .api import auth, violations, users, config_api, live_monitoring
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +72,15 @@ app = FastAPI(
     version=settings.APP_VERSION,
     description="""
     **V-Watch Traffic Violation Management API**
-    
+
     Centralized backend for AI-powered traffic violation detection.
-    
+
     ## Features
     * JWT Authentication with RBAC
     * Violation submission from Edge AI
     * Human verification workflow
     * Evidence integrity verification (SHA-256)
+    * Live monitoring with WebSocket
     * Notification system
     """,
     docs_url="/docs",
@@ -128,6 +129,7 @@ app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(violations.router, prefix=API_PREFIX)
 app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(config_api.router, prefix=API_PREFIX)
+app.include_router(live_monitoring.router, prefix=API_PREFIX)
 
 # Static files for uploaded evidence
 uploads_path = Path(settings.UPLOAD_DIR)

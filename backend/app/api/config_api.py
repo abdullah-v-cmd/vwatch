@@ -19,7 +19,7 @@ router = APIRouter(tags=["System Configuration"])
 
 # ─── System Config ────────────────────────────────────────────────────────────
 
-@router.get("/config", prefix="/config")
+@router.get("/config")
 async def list_config(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -84,7 +84,8 @@ async def delete_config(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a system configuration entry."""
-    await db.execute(delete(SystemConfig).where(SystemConfig.key == key))
+    from sqlalchemy import delete as sa_delete
+    await db.execute(sa_delete(SystemConfig).where(SystemConfig.key == key))
     await db.commit()
     return {"message": f"Config key '{key}' deleted"}
 
@@ -119,11 +120,10 @@ async def list_audit_logs(
         filters.append(AuditLog.created_at <= date_to)
 
     if filters:
-        from sqlalchemy import and_
         query = query.where(and_(*filters))
         count_query = count_query.where(and_(*filters))
 
-    total = (await db.execute(count_query)).scalar()
+    total = (await db.execute(count_query)).scalar() or 0
     offset = (page - 1) * page_size
     result = await db.execute(
         query.order_by(desc(AuditLog.created_at)).offset(offset).limit(page_size)
