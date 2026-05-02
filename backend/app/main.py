@@ -3,6 +3,7 @@ V-Watch Backend - FastAPI Application Entry Point
 """
 
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,8 @@ from .core.database import create_tables
 from .core.security import PasswordHasher
 from .models.user import User, UserRole
 from .api import auth, violations, users, config_api, live_monitoring, yolo_analysis
+from .api import camera_stream
+from .services.camera_manager import camera_manager
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,8 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     logger.info("🚀 V-Watch Backend starting...")
+
+    # ── Database ─────────────────────────────────────────────────────────────
     try:
         await create_tables()
         logger.info("✅ Database tables created/verified")
@@ -58,16 +63,35 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️  Database setup failed (may need PostgreSQL): {e}")
 
-    # Create upload directories
+    # ── Upload directories ────────────────────────────────────────────────────
     upload_path = Path(settings.UPLOAD_DIR)
     upload_path.mkdir(parents=True, exist_ok=True)
     (upload_path / "yolo_temp").mkdir(parents=True, exist_ok=True)
     logger.info(f"✅ Upload dir ready: {upload_path.resolve()}")
+
+    # ── Persistent Camera Manager ─────────────────────────────────────────────
+    # Give the camera manager a reference to the running event loop so it can
+    # schedule async broadcasts from background threads.
+    loop = asyncio.get_event_loop()
+    camera_manager.set_event_loop(loop)
+
+    # Wire up the WebSocket broadcast callback (avoids circular imports)
+    async def _broadcast_violation(event: dict):
+        await live_monitoring.manager.broadcast(event)
+
+    camera_manager.set_broadcast_callback(_broadcast_violation)
+
+    # Auto-start any cameras that were pre-configured
+    camera_manager.start_all()
+    logger.info("✅ Camera Manager started")
     logger.info("✅ V-Watch Backend ready")
 
     yield
 
+    # ── Shutdown ──────────────────────────────────────────────────────────────
     logger.info("🛑 V-Watch Backend shutting down...")
+    camera_manager.stop_all()
+    logger.info("✅ All cameras stopped")
 
 
 # ─── Application ──────────────────────────────────────────────────────────────
@@ -82,12 +106,15 @@ Centralized backend for AI-powered traffic violation detection.
 
 ## Features
 * JWT Authentication with RBAC
+* **Persistent Backend Camera System** — cameras run independently of frontend
+* **Multi-Camera Support** — each camera has its own thread, stream, and MJPEG endpoint
+* **MJPEG Streaming** — `GET /api/v1/cameras/stream/{camera_id}` (embeddable in `<img>`)
+* **WebSocket per camera** — `WS /api/v1/cameras/ws/{camera_id}` for base64 frames
+* Live violation WebSocket broadcast — `WS /api/v1/live/ws`
 * Violation submission from Edge AI (no auth required for POST /violations)
 * Human verification workflow (approve / reject)
 * Evidence integrity verification (SHA-256)
-* Live monitoring with WebSocket
 * YOLO model status & admin video analysis
-* Notification system
 """,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -98,8 +125,6 @@ Centralized backend for AI-powered traffic violation detection.
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# Allow all origins so both Docker and local dev work without env changes.
-# Restrict to specific domains in production via ALLOWED_ORIGINS env var.
 _origins = settings.ALLOWED_ORIGINS
 _allow_all = "*" in _origins
 
@@ -143,6 +168,7 @@ app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(config_api.router, prefix=API_PREFIX)
 app.include_router(live_monitoring.router, prefix=API_PREFIX)
 app.include_router(yolo_analysis.router, prefix=API_PREFIX)
+app.include_router(camera_stream.router, prefix=API_PREFIX)   # ← new persistent stream
 
 # Static files for uploaded evidence
 uploads_path = Path(settings.UPLOAD_DIR)
@@ -154,10 +180,15 @@ app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 
 @app.get("/health", tags=["Health"])
 async def health_check():
+    cam_summary = camera_manager.status_summary()
     return {
         "status": "healthy",
         "version": settings.APP_VERSION,
         "name": settings.APP_NAME,
+        "cameras": {
+            "total": cam_summary["total_cameras"],
+            "running": cam_summary["running"],
+        },
     }
 
 
@@ -167,4 +198,5 @@ async def root():
         "message": "V-Watch Traffic Management API",
         "version": settings.APP_VERSION,
         "docs": "/docs",
+        "camera_streams": "/api/v1/cameras/stream/{camera_id}",
     }

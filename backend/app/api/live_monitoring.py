@@ -120,18 +120,26 @@ async def websocket_endpoint(websocket: WebSocket):
     Messages from server:
     - { type: "violation", data: {...} }
     - { type: "camera_status", data: {...} }
+    - { type: "camera_state", data: {...} }   ← backend camera state changes
     - { type: "ping", timestamp: "..." }
 
     Messages from client:
     - { type: "ping" }
     - { type: "subscribe", cameras: ["CAM_001", ...] }
+    - { type: "get_cameras" }                 ← request current camera list
     """
     await manager.connect(websocket)
+
+    # Send current backend camera states immediately on connect
+    from ..services.camera_manager import camera_manager
+    cam_summary = camera_manager.status_summary()
+
     await manager.send_personal(websocket, {
         "type": "connected",
         "message": "Connected to V-Watch Live Monitoring",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "clients": manager.count,
+        "cameras": cam_summary["cameras"],
     })
 
     try:
@@ -149,6 +157,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         await manager.send_personal(websocket, {
                             "type": "subscribed",
                             "cameras": msg.get("cameras", []),
+                        })
+                    elif msg.get("type") == "get_cameras":
+                        summary = camera_manager.status_summary()
+                        await manager.send_personal(websocket, {
+                            "type": "camera_list",
+                            "cameras": summary["cameras"],
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                         })
                 except json.JSONDecodeError:
                     pass
@@ -175,10 +190,9 @@ async def report_live_violation(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Frontend webcam / Edge AI reports a live violation detection.
+    Frontend webcam / Edge AI / Backend camera manager reports a live violation.
     - Saves a PENDING Violation record to the database.
-    - Broadcasts the event to all WebSocket clients so every
-      open dashboard tab sees it immediately.
+    - Broadcasts the event to all WebSocket clients.
     """
     timestamp_str = event.timestamp or datetime.now(timezone.utc).isoformat()
 
@@ -186,7 +200,6 @@ async def report_live_violation(
     try:
         vtype = ViolationType(event.violation_type.upper())
     except ValueError:
-        # Fallback: map common names
         _map = {
             "SPEEDING": ViolationType.SPEEDING,
             "RED_LIGHT": ViolationType.RED_LIGHT,
@@ -202,7 +215,6 @@ async def report_live_violation(
     except Exception:
         vtime = datetime.now(timezone.utc)
 
-    # Fine map
     fine_map = {
         ViolationType.SPEEDING: 200.0,
         ViolationType.RED_LIGHT: 500.0,
@@ -211,10 +223,8 @@ async def report_live_violation(
         ViolationType.NO_HELMET: 100.0,
     }
 
-    # Generate unique evidence_id
     evidence_id = f"LIVE-{event.camera_id}-{uuid.uuid4().hex[:12]}"
 
-    # Create violation record in DB
     violation = Violation(
         evidence_id=evidence_id,
         vehicle_id=f"WEBCAM_{event.camera_id}_{uuid.uuid4().hex[:8]}",
@@ -240,7 +250,6 @@ async def report_live_violation(
         await db.rollback()
         violation_id = None
 
-    # Broadcast to all WebSocket clients (dashboards)
     broadcast_data = {
         "type": "violation",
         "data": {
@@ -294,37 +303,49 @@ async def list_monitored_cameras(
     current_user: User = Depends(require_police),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all configured cameras for live monitoring."""
+    """
+    List cameras from both:
+    1. The persistent backend camera manager (with live state)
+    2. Legacy SystemConfig camera entries
+    Merged and deduplicated by camera_id.
+    """
+    from ..services.camera_manager import camera_manager
+
+    # Backend camera manager cameras (authoritative)
+    backend_cams = {c["camera_id"]: c for c in camera_manager.list_cameras()}
+
+    # Legacy DB-stored cameras
     result = await db.execute(
         select(SystemConfig).where(SystemConfig.key.like("camera.%"))
     )
     configs = result.scalars().all()
 
-    cameras = []
     for c in configs:
-        try:
-            cam_data = json.loads(c.value) if c.value else {}
-            cameras.append({
-                "camera_id": c.key.replace("camera.", ""),
-                "config_key": c.key,
-                "name": cam_data.get("name", c.key),
-                "url": cam_data.get("url", ""),
-                "source_type": cam_data.get("source_type", "rtsp"),
-                "location": cam_data.get("location", ""),
-                "speed_limit": cam_data.get("speed_limit", 60.0),
-                "enabled": cam_data.get("enabled", True),
-            })
-        except Exception:
-            cameras.append({
-                "camera_id": c.key.replace("camera.", ""),
-                "config_key": c.key,
-                "name": c.key,
-                "url": c.value or "",
-                "source_type": "rtsp",
-                "location": "",
-                "speed_limit": 60.0,
-                "enabled": True,
-            })
+        cid = c.key.replace("camera.", "")
+        if cid not in backend_cams:
+            try:
+                cam_data = json.loads(c.value) if c.value else {}
+                backend_cams[cid] = {
+                    "camera_id": cid,
+                    "config_key": c.key,
+                    "name": cam_data.get("name", cid),
+                    "source": cam_data.get("url", ""),
+                    "source_type": cam_data.get("source_type", "rtsp"),
+                    "location": cam_data.get("location", ""),
+                    "speed_limit": cam_data.get("speed_limit", 60.0),
+                    "enabled": cam_data.get("enabled", True),
+                    "state": "stopped",
+                    "stream_url": f"/api/v1/cameras/stream/{cid}",
+                }
+            except Exception:
+                pass
+
+    # Enrich each entry with stream URL
+    cameras = []
+    for cid, cam in backend_cams.items():
+        cam["stream_url"] = f"/api/v1/cameras/stream/{cid}"
+        cam["ws_url"] = f"/api/v1/cameras/ws/{cid}"
+        cameras.append(cam)
 
     return {"cameras": cameras, "total": len(cameras)}
 
@@ -335,9 +356,28 @@ async def add_monitored_camera(
     current_user: User = Depends(require_police),
     db: AsyncSession = Depends(get_db),
 ):
-    """Add a new camera to live monitoring."""
-    key = f"camera.{cam.camera_id}"
+    """
+    Add a camera to both the persistent backend manager and legacy DB config.
+    Backend starts capturing immediately.
+    """
+    from ..services.camera_manager import camera_manager
 
+    # Register in backend camera manager
+    source = cam.url if cam.url and cam.url.lower() not in ("webcam", "") else "0"
+    camera_manager.add_camera(
+        camera_id=cam.camera_id,
+        name=cam.name,
+        source=source,
+        source_type=cam.source_type,
+        location=cam.location or "",
+        speed_limit=cam.speed_limit or 60.0,
+        enabled=cam.enabled,
+    )
+    if cam.enabled:
+        camera_manager.start_camera(cam.camera_id)
+
+    # Also save to DB for persistence across restarts
+    key = f"camera.{cam.camera_id}"
     existing = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
     existing_cfg = existing.scalar_one_or_none()
 
@@ -366,10 +406,19 @@ async def add_monitored_camera(
 
     await manager.broadcast({
         "type": "camera_added",
-        "data": {"camera_id": cam.camera_id, "name": cam.name},
+        "data": {
+            "camera_id": cam.camera_id,
+            "name": cam.name,
+            "stream_url": f"/api/v1/cameras/stream/{cam.camera_id}",
+        },
     })
 
-    return {"status": "added", "camera_id": cam.camera_id}
+    return {
+        "status": "added",
+        "camera_id": cam.camera_id,
+        "stream_url": f"/api/v1/cameras/stream/{cam.camera_id}",
+        "ws_url": f"/api/v1/cameras/ws/{cam.camera_id}",
+    }
 
 
 @router.delete("/cameras/{camera_id}")
@@ -378,10 +427,14 @@ async def remove_monitored_camera(
     current_user: User = Depends(require_police),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove a camera from live monitoring."""
-    from sqlalchemy import delete
+    """Remove a camera from both backend manager and DB."""
+    from sqlalchemy import delete as sa_delete
+    from ..services.camera_manager import camera_manager
+
+    camera_manager.remove_camera(camera_id)
+
     key = f"camera.{camera_id}"
-    await db.execute(delete(SystemConfig).where(SystemConfig.key == key))
+    await db.execute(sa_delete(SystemConfig).where(SystemConfig.key == key))
     await db.commit()
 
     await manager.broadcast({
@@ -398,6 +451,8 @@ async def get_live_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """Get live monitoring statistics."""
+    from ..services.camera_manager import camera_manager
+
     now = datetime.now(timezone.utc)
     hour_ago = now - timedelta(hours=1)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -424,11 +479,15 @@ async def get_live_stats(
     )
     recent = recent_result.scalars().all()
 
+    cam_summary = camera_manager.status_summary()
+
     return {
         "connected_clients": manager.count,
         "last_hour_violations": last_hour,
         "today_violations": today,
         "violations_by_type_today": by_type,
+        "active_cameras": cam_summary["running"],
+        "total_cameras": cam_summary["total_cameras"],
         "recent_violations": [
             {
                 "id": v.id,
@@ -457,7 +516,7 @@ async def get_recent_violations(
         query = query.where(Violation.camera_id == camera_id)
 
     result = await db.execute(query)
-    violations = result.scalars().all()
+    violations_list = result.scalars().all()
 
     return {
         "violations": [
@@ -473,9 +532,9 @@ async def get_recent_violations(
                 "status": v.status.value,
                 "frame_image_url": v.frame_image_url,
             }
-            for v in violations
+            for v in violations_list
         ],
-        "total": len(violations),
+        "total": len(violations_list),
     }
 
 
