@@ -101,7 +101,6 @@ An end-to-end traffic violation detection and management platform powered by YOL
 
 ### 1. Clone and configure
 ```bash
-git clone https://github.com/abdullah-v-cmd/vwatch.git
 cd vwatch
 cp backend/.env.example backend/.env
 # Optional: set SECRET_KEY in backend/.env
@@ -120,7 +119,19 @@ docker compose up -d
 
 ### 3. (Optional) Start Edge AI
 ```bash
-docker compose --profile edge up -d edge_ai
+🧱 STEP 1 — Build image first
+
+Run this in your project folder:
+
+docker-compose build edge_ai
+
+👉 This creates your Docker image (installs Python, Torch, YOLO, etc.)
+
+🚀 STEP 2 — Start the container
+Option A (recommended – attach logs)
+docker-compose --profile edge up edge_ai
+Option B (run in background)
+docker-compose --profile edge up -d edge_ai
 ```
 
 ### 4. Stop everything
