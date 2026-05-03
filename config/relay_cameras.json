@@ -1,0 +1,8 @@
+[
+  {
+    "id": "CAM_001",
+    "source": "demo",
+    "fps": 15,
+    "notes": "Change 'source' to '0' for webcam, or 'rtsp://...' for network camera"
+  }
+]
