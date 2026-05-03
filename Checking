@@ -1,0 +1,252 @@
+Here is a clean **README.md for new users** of your V-Watch Edge AI system. You can directly place this in your project root.
+
+---
+
+# 🛡️ V-Watch Edge AI System
+
+An AI-powered **real-time traffic surveillance system** using YOLO, DeepSORT tracking, and violation detection (speeding, red light, lane violations, ANPR).
+
+---
+
+# 🚀 Features
+
+* 🚗 Real-time vehicle detection (YOLOv8)
+* 🎯 Multi-object tracking (DeepSORT)
+* ⚡ Speed estimation system
+* 🚦 Red-light violation detection
+* 🛣️ Wrong-direction & lane violation detection
+* 🔍 Automatic number plate recognition (ANPR)
+* 📸 Evidence generation (image + video clips)
+* 🌐 Backend API integration
+* 🐳 Fully Dockerized system
+* 🎥 Live camera / RTSP / video file support
+
+---
+
+# 📦 Project Structure
+
+```
+vwatch-main/
+│
+├── edge_ai/              # AI engine (YOLO + tracking)
+│   ├── main.py
+│   ├── detectors/
+│   ├── trackers/
+│   ├── violations/
+│   ├── anpr/
+│   ├── utils/
+│   ├── models/
+│   └── yolov8n.pt
+│
+├── backend/              # FastAPI backend
+├── frontend/             # React dashboard
+├── docker-compose.yml
+├── Dockerfile
+└── README.md
+```
+
+---
+
+# ⚙️ Requirements
+
+If running locally (without Docker):
+
+* Python 3.10+
+* pip
+* OpenCV
+* PyTorch
+* Ultralytics YOLO
+* FastAPI (backend)
+* Node.js (frontend)
+
+---
+
+# 🐳 Run with Docker (Recommended)
+
+## 1. Build all services
+
+```bash
+docker compose build
+```
+
+---
+
+## 2. Start system
+
+```bash
+docker compose up
+```
+
+---
+
+## 3. Run in background
+
+```bash
+docker compose up -d
+```
+
+---
+
+## 4. Stop system
+
+```bash
+docker compose down
+```
+
+---
+
+# 📷 Run Edge AI only
+
+```bash
+docker run -it vwatch-main-edge_ai
+```
+
+With restart protection:
+
+```bash
+docker run -d --restart unless-stopped vwatch-main-edge_ai
+```
+
+---
+
+# 🎥 Camera Configuration
+
+Inside `config/edge_config.json`:
+
+```json
+{
+  "source": 0,
+  "fps": 15,
+  "speed_limit_kmh": 60,
+  "display": true
+}
+```
+
+### Source options:
+
+* `0` → webcam
+* RTSP URL → CCTV camera
+* video file path → offline testing
+
+---
+
+# 🧠 YOLO Model Info
+
+* Model used: `yolov8n.pt`
+* Location: `/app/yolov8n.pt`
+* Loaded using Singleton pattern (only once in memory)
+
+---
+
+# 📊 System Flow
+
+```
+Camera → Stream Handler → YOLO Detection → DeepSORT Tracking
+      → Violation Engine → Evidence Generator → Backend API
+```
+
+---
+
+# 🚨 Types of Violations Detected
+
+* 🚗 Overspeeding
+* 🚦 Red light violation
+* 🛣️ Wrong direction driving
+* 🚧 Lane violation
+* 🔍 Vehicle plate detection (ANPR)
+
+---
+
+# 📸 Evidence Generated
+
+For every violation:
+
+* Frame snapshot
+* Cropped vehicle image
+* License plate image
+* Optional video clip
+* Metadata (time, location, speed, type)
+
+---
+
+# 🌐 Backend Integration
+
+Make sure backend is running at:
+
+```
+http://localhost:8000
+```
+
+Or set in environment:
+
+```bash
+BACKEND_URL=http://your-server-ip:8000
+```
+
+---
+
+# 🔐 Environment Variables
+
+| Variable        | Description        |
+| --------------- | ------------------ |
+| CAMERA_ID       | Camera identifier  |
+| LOCATION        | Camera location    |
+| BACKEND_URL     | Backend API URL    |
+| YOLO_MODEL_PATH | Path to YOLO model |
+| DISPLAY         | Show video window  |
+
+---
+
+# 🧪 Troubleshooting
+
+### ❌ YOLO not loading
+
+* Ensure `yolov8n.pt` exists in `/app`
+
+### ❌ No video output
+
+* Set `"display": true`
+* Check camera source
+
+### ❌ Docker slow build
+
+* First build is heavy (OpenCV + PyTorch)
+* Subsequent builds will use cache
+
+---
+
+# 🛡️ Stability Tips (IMPORTANT)
+
+* Use restart policy:
+
+  ```bash
+  --restart unless-stopped
+  ```
+
+* Avoid multiple YOLO instances
+
+* Do not modify Dockerfile frequently
+
+* Keep model inside container
+
+---
+
+# 📌 Author Notes
+
+This system is designed for:
+
+* Smart traffic monitoring
+* Edge AI deployment
+* Real-time violation detection
+* Scalable CCTV analytics
+
+---
+
+If you want next upgrade, I can also help you create:
+
+🔥 GitHub professional README (with badges + images)
+🔥 System architecture diagram
+🔥 Deployment guide (AWS / VPS)
+🔥 Full documentation (SRS-level)
+
+Just tell me 👍
