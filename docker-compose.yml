@@ -1,108 +1,309 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# V-Watch CCTV AI System — Production Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Services:
+#   postgres      — PostgreSQL 16 database
+#   backend       — FastAPI backend (violation management + camera REST API)
+#   frontend      — React / Nginx frontend
+#   stream_relay  — Persistent MJPEG stream relay (independent of Edge AI)
+#   edge_ai       — YOLO detection engine (profile: edge)
+#   watchdog      — 24/7 auto-recovery watchdog (profile: watchdog)
+#
+# Quick start:
+#   docker compose up -d                    # core services (no edge_ai)
+#   docker compose --profile edge up -d    # + edge_ai
+#   docker compose --profile full up -d    # + edge_ai + watchdog
+#
+# Camera modes (set CAMERA_SOURCE):
+#   CAMERA_SOURCE=demo          → synthetic frames, no real camera needed
+#   CAMERA_SOURCE=0             → /dev/video0 (requires device mapping below)
+#   CAMERA_SOURCE=rtsp://...    → RTSP network camera
+#   CAMERA_SOURCE=/dev/video0   → explicit device path
+# ═══════════════════════════════════════════════════════════════════════════════
+
+x-restart-policy: &restart-always
+  restart: always
+
+x-restart-unless-stopped: &restart-unless-stopped
+  restart: unless-stopped
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+# ─── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  vwatch_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+# ─── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  evidence_store:
+    driver: local
+  model_cache:        # YOLO model shared between services (prevents re-download)
+    driver: local
+  watchdog_logs:
+    driver: local
+  edge_logs:
+    driver: local
+  relay_logs:
+    driver: local
+
+# ─── Services ──────────────────────────────────────────────────────────────────
 services:
 
-  # ─── PostgreSQL ─────────────────────────────────────
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: vwatch_postgres
+    <<: *restart-always
+    <<: *default-logging
     environment:
-      POSTGRES_DB: vwatch_db
-      POSTGRES_USER: vwatch
-      POSTGRES_PASSWORD: vwatch_pass
+      POSTGRES_DB:       vwatch_db
+      POSTGRES_USER:     vwatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vwatch_pass}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vwatch -d vwatch_db"]
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+      start_period: 10s
     networks:
-      - vwatch_net
+      vwatch_net:
+        ipv4_address: 172.20.0.10
 
 
-  # ─── Backend ────────────────────────────────────────
+  # ── Backend (FastAPI) ───────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: vwatch_backend
+    <<: *restart-always
+    <<: *default-logging
     environment:
-      DATABASE_URL: postgresql+asyncpg://vwatch:vwatch_pass@postgres:5432/vwatch_db
-      DATABASE_URL_SYNC: postgresql://vwatch:vwatch_pass@postgres:5432/vwatch_db
-      SECRET_KEY: ${SECRET_KEY:-change_this_in_production_use_32_chars_minimum}
-      DEBUG: "false"
-      UPLOAD_DIR: /app/uploads
-      ALLOWED_ORIGINS: '["*"]'
-      YOLO_MODEL_PATH: /app/models/yolov8n.pt
-      YOLO_DEVICE: cpu
+      DATABASE_URL:      postgresql+asyncpg://vwatch:${POSTGRES_PASSWORD:-vwatch_pass}@postgres:5432/vwatch_db
+      DATABASE_URL_SYNC: postgresql://vwatch:${POSTGRES_PASSWORD:-vwatch_pass}@postgres:5432/vwatch_db
+      SECRET_KEY:        ${SECRET_KEY:-change_this_in_production_32chars!!}
+      DEBUG:             "false"
+      UPLOAD_DIR:        /app/uploads
+      ALLOWED_ORIGINS:   '["*"]'
+      YOLO_MODEL_PATH:   /app/models/yolov8n.pt
+      YOLO_DEVICE:       cpu
     volumes:
       - evidence_store:/app/uploads
+      - model_cache:/app/models
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
-        condition: service_started
-    restart: unless-stopped
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     networks:
-      - vwatch_net
+      vwatch_net:
+        ipv4_address: 172.20.0.11
 
 
-  # ─── Frontend ───────────────────────────────────────
+  # ── Stream Relay ────────────────────────────────────────────────────────────
+  # Persistent MJPEG stream server — runs independently of Edge AI.
+  # Frontend always gets a live stream even during Edge AI restarts.
+  stream_relay:
+    build:
+      context: ./stream_relay
+      dockerfile: Dockerfile
+    container_name: vwatch_relay
+    <<: *restart-always
+    <<: *default-logging
+    environment:
+      CAMERA_SOURCE: ${CAMERA_SOURCE:-demo}
+      CAMERA_ID:     ${CAMERA_ID:-CAM_001}
+      TARGET_FPS:    ${TARGET_FPS:-15}
+      RELAY_PORT:    "8002"
+      LOG_DIR:       /app/logs
+    volumes:
+      - relay_logs:/app/logs
+      - ./config:/app/config:ro
+      # ── WEBCAM: uncomment to pass through physical webcam ──
+      # devices:
+      #   - /dev/video0:/dev/video0
+    ports:
+      - "${RELAY_PORT:-8002}:8002"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      vwatch_net:
+        ipv4_address: 172.20.0.12
+
+
+  # ── Frontend (React / Nginx) ────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: vwatch_frontend
+    <<: *restart-unless-stopped
+    <<: *default-logging
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
-      - backend
-    restart: unless-stopped
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks:
-      - vwatch_net
+      vwatch_net:
+        ipv4_address: 172.20.0.13
 
 
-  # ─── Edge AI (IMPORTANT FIXED) ───────────────────────
+  # ── Edge AI (YOLO Detection Engine) ────────────────────────────────────────
+  # Profile: "edge" — enable with: docker compose --profile edge up
+  #
+  # IMPORTANT FIXES applied:
+  #   ✔ YOLO model baked into image at build time (never re-downloads)
+  #   ✔ CAMERA_SOURCE=demo → works with NO physical camera
+  #   ✔ CAMERA_SOURCE=0 with /dev/video0 device mapping → real webcam
+  #   ✔ CAMERA_SOURCE=rtsp://... → network camera
+  #   ✔ Health check on :8001/health (watchdog monitors this)
+  #   ✔ Auto-reconnect built into StreamHandler
+  #   ✔ No OpenCV display (--no-display flag always on)
+  #   ✔ Evidence volume shared with backend
   edge_ai:
     build:
       context: ./edge_ai
       dockerfile: Dockerfile
     container_name: vwatch_edge
-
+    profiles: ["edge", "full"]
+    <<: *restart-always
+    <<: *default-logging
     environment:
-      BACKEND_URL: http://backend:8000
-      CAMERA_SOURCE: "0"
-      CAMERA_ID: CAM_001
-      LOCATION: "Main Street Camera"
-      DISPLAY: "false"
-      YOLO_MODEL_PATH: /app/models/yolov8n.pt
+      # ── Camera ──────────────────────────────────────────────────
+      CAMERA_SOURCE:     ${CAMERA_SOURCE:-demo}
+      CAMERA_ID:         ${CAMERA_ID:-CAM_001}
+      LOCATION:          ${LOCATION:-Main Street Camera}
+      TARGET_FPS:        ${TARGET_FPS:-15}
+
+      # ── Backend ─────────────────────────────────────────────────
+      BACKEND_URL:       http://backend:8000
+      API_KEY:           ${API_KEY:-}
+
+      # ── YOLO ────────────────────────────────────────────────────
+      # Model is BAKED INTO IMAGE — points to pre-downloaded file
+      YOLO_MODEL_PATH:   /app/models/yolov8n.pt
+      YOLO_DEVICE:       cpu
+
+      # ── Output / Logs ────────────────────────────────────────────
+      OUTPUT_DIR:        /app/uploads
+      LOG_DIR:           /app/logs
+      HEALTH_PORT:       "8001"
+
+      # ── Features ────────────────────────────────────────────────
+      BLUR_FACES:        "true"
 
     volumes:
       - evidence_store:/app/uploads
+      - model_cache:/app/models
+      - edge_logs:/app/logs
       - ./config:/app/config:ro
-      - ./models:/app/models:ro
 
-    # ⚠️ Optional for Linux only
+    # ── WEBCAM PASSTHROUGH ──────────────────────────────────────
+    # Uncomment ONE of these blocks to use a real webcam:
+    #
+    # Option A — Linux device node (most common):
     # devices:
     #   - /dev/video0:/dev/video0
+    #
+    # Option B — privileged mode (if Option A doesn't work):
+    # privileged: true
+    # group_add:
+    #   - video
 
+    ports:
+      - "${EDGE_AI_PORT:-8001}:8001"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 20s
+      timeout: 8s
+      retries: 5
+      start_period: 60s    # Extra time for YOLO to initialize
+    networks:
+      vwatch_net:
+        ipv4_address: 172.20.0.14
+
+
+  # ── Watchdog (Auto-Recovery) ────────────────────────────────────────────────
+  # Profile: "watchdog" / "full" — enable with: docker compose --profile full up
+  #
+  # The watchdog monitors ALL services and auto-restarts failed containers.
+  # It requires the Docker socket to be mounted (read-only for safety).
+  watchdog:
+    build:
+      context: ./watchdog
+      dockerfile: Dockerfile
+    container_name: vwatch_watchdog
+    profiles: ["watchdog", "full"]
+    <<: *restart-always
+    <<: *default-logging
+    environment:
+      BACKEND_URL:           http://backend:8000
+      EDGE_AI_URL:           http://edge_ai:8001
+      CHECK_INTERVAL:        "15"
+      HEALTH_TIMEOUT:        "8"
+      RESTART_COOLDOWN:      "30"
+      MAX_FAILS:             "3"
+      BACKOFF_BASE:          "2.0"
+      MAX_BACKOFF:           "300"
+      ENABLE_DOCKER_RESTART: "true"
+      STATUS_PORT:           "9090"
+      LOG_DIR:               /app/logs
+      # Container names for docker restart command
+      BACKEND_CONTAINER:     vwatch_backend
+      EDGE_AI_CONTAINER:     vwatch_edge
+      POSTGRES_CONTAINER:    vwatch_postgres
+      FRONTEND_CONTAINER:    vwatch_frontend
+      RELAY_CONTAINER:       vwatch_relay
+    volumes:
+      - watchdog_logs:/app/logs
+      # Docker socket — watchdog needs this to restart containers
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "${WATCHDOG_PORT:-9090}:9090"
     depends_on:
       - backend
-
-    restart: always   # 🔥 IMPORTANT for camera stability
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
-      - vwatch_net
-    profiles:
-      - edge
-
-
-volumes:
-  postgres_data:
-  evidence_store:
-
-networks:
-  vwatch_net:
-    driver: bridge
+      vwatch_net:
+        ipv4_address: 172.20.0.15
